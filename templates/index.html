@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Simulador PMP · Inicio{% endblock %}
+{% block content %}
+  <section class="hero">
+    <p class="eyebrow">Práctica individual</p>
+    <h1>Prepárate con pruebas configurables</h1>
+    <p>Elige los dominios y enfoques de tu práctica, responde a tu ritmo y revisa explicaciones al terminar.</p>
+    <div class="actions">
+      <a class="button" href="{{ url_for('register') }}">Crear cuenta</a>
+      <a class="button secondary" href="{{ url_for('login') }}">Iniciar sesión</a>
+    </div>
+  </section>
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Mi banco · Simulador PMP{% endblock %}
+{% block content %}
+  <p class="eyebrow">Banco personal</p>
+  <h1>Mis preguntas</h1>
+  <nav class="filter-tabs" aria-label="Filtrar banco personal">
+    <a class="{% if selected_kind == 'all' %}active{% endif %}" href="{{ url_for('personal_bank', kind='all') }}">Todas</a>
+    <a class="{% if selected_kind == 'used' %}active{% endif %}" href="{{ url_for('personal_bank', kind='used') }}">Respondidas</a>
+    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('personal_bank', kind='pending') }}">Pendientes</a>
+    <a class="{% if selected_kind == 'favorites' %}active{% endif %}" href="{{ url_for('personal_bank', kind='favorites') }}">Favoritas</a>
+  </nav>
+  {% if questions %}
+    <div class="review-list">
+      {% for question in questions %}
+        <article class="panel review-card">
+          <div class="section-heading">
+            <p class="eyebrow">{{ "Automatizada" if question.source_type == "automated" else "Banco general" }} · {{ question.seen_count }} usos{% if question.pending %} · Pendiente{% endif %}</p>
+            <form method="post" action="{{ url_for('toggle_favorite', question_id=question.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="link-button" type="submit" aria-label="Quitar de favoritas si está marcada">{{ "★ Favorita" if question.favorite else "☆ Marcar favorita" }}</button>
+            </form>
+          </div>
+          <h2>{{ question.prompt }}</h2>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="panel muted">Aún no hay preguntas en esta vista. Las preguntas de una prueba aparecerán aquí al finalizarla.</p>
+  {% endif %}
+{% endblock %}

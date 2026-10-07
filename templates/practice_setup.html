@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Configurar prueba · Simulador PMP{% endblock %}
+{% block head %}<script defer src="{{ url_for('static', filename='practice.js') }}"></script>{% endblock %}
+{% block content %}
+  <section>
+    <p class="eyebrow">Nueva prueba</p>
+    <h1>Elige tus categorías</h1>
+    <p class="muted">Se tomarán preguntas que coincidan con al menos una selección de cada grupo. Las combinaciones se validan según las fuentes documentadas.</p>
+    <form method="post" action="{{ url_for('start_exam') }}" id="practice-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="filter-grid">
+        <fieldset class="panel">
+          <legend>Dominios de desempeño</legend>
+          {% for key, label in performance_domains.items() %}
+            <label class="check-row"><input type="checkbox" name="performance" value="{{ key }}" {% if key in selected.performance %}checked{% endif %}> {{ label }}</label>
+          {% endfor %}
+        </fieldset>
+        <fieldset class="panel">
+          <legend>Enfoques metodológicos</legend>
+          {% for key, label in methodologies.items() %}
+            <label class="check-row"><input type="checkbox" name="methodology" value="{{ key }}" {% if key in selected.methodology %}checked{% endif %}> {{ label }}</label>
+          {% endfor %}
+        </fieldset>
+        <fieldset class="panel">
+          <legend>Dominios oficiales ECO</legend>
+          {% for key, label in eco_domains.items() %}
+            <label class="check-row"><input type="checkbox" name="eco" value="{{ key }}" {% if key in selected.eco %}checked{% endif %}> {{ label }}</label>
+          {% endfor %}
+        </fieldset>
+      </div>
+      <p id="combination-warning" class="message error" hidden>La selección incluye combinaciones de enfoque y dominio oficial que no están permitidas.</p>
+      <label class="size-choice">Tamaño de la prueba
+        <select name="length" required>
+          {% for length in exam_lengths %}
+            <option value="{{ length }}">{{ length }} preguntas{% if length == 75 %} (mini examen){% elif length == 180 %} (examen){% endif %} · {{ (length * 76 // 60) }} min {{ (length * 76 % 60) }} s</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p class="available-count" id="availability-status" data-count="{{ available_count if available_count is not none else '' }}">
+        {% if available_count is not none %}
+          Preguntas compatibles disponibles: <strong>{{ available_count }}</strong>
+        {% else %}
+          Selecciona al menos una opción de cada grupo para consultar disponibilidad.
+        {% endif %}
+      </p>
+      <button class="button" id="start-button" type="submit">Iniciar prueba</button>
+    </form>
+  </section>
+  <script id="valid-combinations" type="application/json">{{ valid_combinations|tojson }}</script>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Revisión · Simulador PMP{% endblock %}
+{% block content %}
+  <p class="eyebrow">Prueba {{ exam.id }}</p>
+  <h1>Revisión de respuestas</h1>
+  <nav class="filter-tabs" aria-label="Filtrar respuestas">
+    <a class="{% if selected_kind == 'correct' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='correct') }}">Buenas</a>
+    <a class="{% if selected_kind == 'incorrect' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='incorrect') }}">Malas</a>
+    <a class="{% if selected_kind == 'both' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}">Ambas</a>
+    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='pending') }}">Guardadas</a>
+  </nav>
+  {% if questions %}
+    <div class="review-list">
+      {% for question in questions %}
+        <article class="panel review-card">
+          <p class="eyebrow">Pregunta {{ question.position }} ·
+            {% if question.result == "correct" %}Buena{% elif question.result == "incorrect" %}Mala{% else %}Guardada{% endif %}
+          </p>
+          <h2>{{ question.prompt }}</h2>
+          {% if question.result == "pending" %}
+            <p><strong>Sin respuesta registrada.</strong> Esta pregunta quedó guardada como pendiente.</p>
+          {% else %}
+            <p><strong>Tu respuesta:</strong> {{ question.options[question.selected_option] }}</p>
+            <p><strong>Retroalimentación:</strong>
+              {% if question.result == "correct" %}Tu respuesta es correcta. {% else %}Tu respuesta es incorrecta. {% endif %}
+              {{ question.option_feedback[question.selected_option] }}
+            </p>
+            <p><strong>Respuesta correcta:</strong> {{ question.options[question.correct_option] }}</p>
+            <p class="explanation"><strong>Explicación:</strong> {{ question.explanation }}</p>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="panel muted">No hay preguntas en esta categoría.</p>
+  {% endif %}
+  <a class="button secondary" href="{{ url_for('exam_results', exam_id=exam.id) }}">Volver a resultados</a>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Resultados · Simulador PMP{% endblock %}
+{% block content %}
+  <p class="eyebrow">Prueba {{ exam.id }} · {% if exam.status == "expired" %}Tiempo agotado{% else %}Finalizada{% endif %}</p>
+  <h1>Resultados</h1>
+  <p class="muted">{{ exam.requested_count }} preguntas · Iniciada {{ exam.started_at|datetime }}</p>
+  <section class="stat-grid result-grid">
+    <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='correct') }}"><strong>{{ counts.correct or 0 }}</strong><span>Buenas</span></a>
+    <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='incorrect') }}"><strong>{{ counts.incorrect or 0 }}</strong><span>Malas</span></a>
+    <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}"><strong>{{ (counts.correct or 0) + (counts.incorrect or 0) }}</strong><span>Ambas</span></a>
+    <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='pending') }}"><strong>{{ counts.pending or 0 }}</strong><span>Guardadas</span></a>
+  </section>
+  <div class="actions">
+    <a class="button" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}">Revisar respuestas</a>
+    <a class="button secondary" href="{{ url_for('dashboard') }}">Volver al inicio</a>
+  </div>
+{% endblock %}

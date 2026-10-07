@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Iniciar sesión · Simulador PMP{% endblock %}
+{% block content %}
+  <section class="form-card">
+    <h1>Iniciar sesión</h1>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Correo electrónico
+        <input type="email" name="email" autocomplete="email" required>
+      </label>
+      <label>Contraseña
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button class="button" type="submit">Entrar</button>
+    </form>
+    <p>¿Aún no tienes cuenta? <a href="{{ url_for('register') }}">Regístrate</a>.</p>
+  </section>
+{% endblock %}
