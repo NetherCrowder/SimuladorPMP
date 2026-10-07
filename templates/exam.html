@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Prueba en curso · Simulador PMP{% endblock %}
+{% block head %}<script defer src="{{ url_for('static', filename='exam.js') }}"></script>{% endblock %}
+{% block content %}
+  <div class="exam-topline">
+    <div><p class="eyebrow">Prueba de {{ exam.requested_count }} preguntas</p><h1>Pregunta {{ current_position }} de {{ exam.requested_count }}</h1></div>
+    <div class="timer" id="timer" data-seconds="{{ remaining_seconds }}" role="timer" aria-live="assertive">--:--:--</div>
+  </div>
+  <div class="exam-layout">
+    <section class="panel question-panel">
+      <p class="question-prompt">{{ current.prompt }}</p>
+      <form method="post" action="{{ url_for('save_exam_answer', exam_id=exam.id) }}" id="answer-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="question_id" value="{{ current.id }}">
+        <input type="hidden" name="next_position" value="{{ current_position + 1 if current_position < exam.requested_count else current_position }}">
+        <fieldset class="answer-options">
+          <legend class="visually-hidden">Selecciona una respuesta</legend>
+          {% for option in current.options %}
+            <label class="answer-option">
+              <input type="radio" name="selected_option" value="{{ loop.index0 }}" {% if current.selected_option == loop.index0 %}checked{% endif %}>
+              <span>{{ option }}</span>
+            </label>
+          {% endfor %}
+        </fieldset>
+        {% if current.marked_saved %}<p class="message">Esta pregunta está guardada como pendiente. Al responderla dejará de estar pendiente.</p>{% endif %}
+        <div class="actions">
+          <button class="button" type="submit" name="action" value="answer">Guardar respuesta y continuar</button>
+          <button class="button secondary" type="submit" name="action" value="save">Marcar como guardada</button>
+        </div>
+      </form>
+    </section>
+    <aside class="panel question-navigation">
+      <h2>Preguntas</h2>
+      <div class="question-number-grid">
+        {% for question in questions %}
+          <a class="question-number {% if question.position == current_position %}current{% endif %} {% if question.marked_saved %}saved{% elif question.selected_option is not none %}answered{% endif %}"
+             href="{{ url_for('take_exam', exam_id=exam.id, question=question.position) }}"
+             aria-label="Pregunta {{ question.position }}{% if question.marked_saved %}, guardada{% elif question.selected_option is not none %}, respondida{% endif %}">
+            {{ question.position }}
+          </a>
+        {% endfor %}
+      </div>
+      <form method="post" action="{{ url_for('save_exam_answer', exam_id=exam.id) }}" class="finish-form" onsubmit="return confirm('¿Finalizar la prueba ahora? Las preguntas sin responder quedarán pendientes.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="question_id" value="{{ current.id }}">
+        <button class="button danger" type="submit" name="action" value="finish">Finalizar prueba</button>
+      </form>
+    </aside>
+  </div>
+{% endblock %}

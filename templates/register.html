@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Crear cuenta · Simulador PMP{% endblock %}
+{% block content %}
+  <section class="form-card">
+    <h1>Crear cuenta</h1>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Nombre de usuario
+        <input name="username" minlength="3" maxlength="40" autocomplete="username" required>
+      </label>
+      <label>Correo electrónico
+        <input type="email" name="email" autocomplete="email" required>
+      </label>
+      <label>Contraseña
+        <input type="password" name="password" minlength="10" autocomplete="new-password" required>
+      </label>
+      <label>Confirmar contraseña
+        <input type="password" name="confirmation" minlength="10" autocomplete="new-password" required>
+      </label>
+      <button class="button" type="submit">Crear cuenta</button>
+    </form>
+    <p>¿Ya tienes cuenta? <a href="{{ url_for('login') }}">Inicia sesión</a>.</p>
+  </section>
+{% endblock %}

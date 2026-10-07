@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Inicio · Simulador PMP{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">Hola, {{ g.user.username }}</p>
+      <h1>Tu espacio de práctica</h1>
+    </div>
+    <a class="button" href="{{ url_for('practice_setup') }}">Configurar una prueba</a>
+  </div>
+  <section class="stat-grid" aria-label="Resumen de tu banco">
+    <div class="stat-card"><strong>{{ stats.total or 0 }}</strong><span>Preguntas en tu banco</span></div>
+    <div class="stat-card"><strong>{{ stats.pending or 0 }}</strong><span>Pendientes</span></div>
+    <div class="stat-card"><strong>{{ stats.favorites or 0 }}</strong><span>Favoritas</span></div>
+  </section>
+  <section class="panel">
+    <div class="section-heading">
+      <h2>Pruebas recientes</h2>
+      <a href="{{ url_for('personal_bank') }}">Ver mi banco</a>
+    </div>
+    {% if recent_exams %}
+      <ul class="exam-list">
+        {% for exam in recent_exams %}
+          <li>
+            <span>{{ exam.requested_count }} preguntas · {{ exam.started_at|datetime }}</span>
+            {% if exam.status == "active" %}
+              <a href="{{ url_for('take_exam', exam_id=exam.id) }}">Continuar</a>
+            {% else %}
+              <a href="{{ url_for('exam_results', exam_id=exam.id) }}">Ver resultados</a>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Todavía no has realizado pruebas.</p>
+    {% endif %}
+  </section>
+{% endblock %}
