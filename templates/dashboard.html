@@ -3,7 +3,7 @@
 {% block content %}
   <div class="page-heading">
     <div>
-      <p class="eyebrow">Hola, {{ g.user.username }}</p>
+      <p class="eyebrow">Hola, {{ g.user.first_name or g.user.username }}</p>
       <h1>Tu espacio de práctica</h1>
     </div>
     <a class="button" href="{{ url_for('practice_setup') }}">Configurar una prueba</a>

@@ -13,8 +13,12 @@
     <nav aria-label="Navegación principal">
       {% if g.user is defined and g.user %}
         <a href="{{ url_for('dashboard') }}">Inicio</a>
-        <a href="{{ url_for('practice_setup') }}">Nueva prueba</a>
-        <a href="{{ url_for('personal_bank') }}">Mi banco</a>
+        {% if g.user.account_role in ["owner", "admin"] %}
+          <a href="{{ url_for('admin_dashboard') }}">Administración</a>
+        {% else %}
+          <a href="{{ url_for('practice_setup') }}">Nueva prueba</a>
+          <a href="{{ url_for('personal_bank') }}">Mi banco</a>
+        {% endif %}
         <form method="post" action="{{ url_for('logout') }}" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="link-button" type="submit">Cerrar sesión</button>
@@ -37,6 +41,6 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
-  <footer class="site-footer">Prototipo de práctica local · Las preguntas de ejemplo son ficticias.</footer>
+  <footer class="site-footer">Simulador PMP</footer>
 </body>
 </html>

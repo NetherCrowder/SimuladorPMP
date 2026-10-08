@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% set editing = question is not none %}
+{% block title %}{{ "Editar" if editing else "Agregar" }} pregunta · Administración{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">Banco {{ "automático" if kind == "automated" else "manual" }}</p>
+      <h1>{{ "Editar pregunta" if editing else "Agregar pregunta" }}</h1>
+    </div>
+    <a class="button secondary" href="{{ url_for('admin_questions') }}">Volver a bancos</a>
+  </div>
+
+  <form class="panel admin-question-form" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="kind" value="{{ kind }}">
+    <label>Pregunta
+      <textarea name="prompt" rows="3" required>{{ question.prompt if editing else request.form.get("prompt", "") }}</textarea>
+    </label>
+    <label>Opciones de respuesta (una por línea)
+      <textarea name="options" rows="5" required>{{ question.options_text if editing else request.form.get("options", "") }}</textarea>
+    </label>
+    <label>Número de la respuesta correcta (empezando en 1)
+      <input name="correct_option" type="number" min="1" value="{{ question.correct_option_form if editing else request.form.get("correct_option", 1) }}" required>
+    </label>
+    <label>Retroalimentación
+      <textarea name="explanation" rows="4" required>{{ question.explanation if editing else request.form.get("explanation", "") }}</textarea>
+    </label>
+
+    <div class="filter-grid">
+      <fieldset class="panel">
+        <legend>Dominio oficial</legend>
+        {% for key, label in eco_domains.items() %}
+          <label class="check-row"><input type="checkbox" name="official_domains" value="{{ key }}" {% if key in selected.official %}checked{% endif %}>{{ label }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="panel">
+        <legend>Enfoque metodológico</legend>
+        {% for key, label in methodologies.items() %}
+          <label class="check-row"><input type="checkbox" name="methodological_approaches" value="{{ key }}" {% if key in selected.methodology %}checked{% endif %}>{{ label }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="panel">
+        <legend>Dominio de desempeño</legend>
+        {% for key, label in performance_domains.items() %}
+          <label class="check-row"><input type="checkbox" name="performance_domains" value="{{ key }}" {% if key in selected.performance %}checked{% endif %}>{{ label }}</label>
+        {% endfor %}
+      </fieldset>
+    </div>
+    <button class="button" type="submit">{{ "Guardar cambios" if editing else "Agregar pregunta" }}</button>
+  </form>
+{% endblock %}

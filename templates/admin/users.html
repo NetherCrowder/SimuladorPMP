@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Usuarios · Administración PMP{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div><p class="eyebrow">Administración</p><h1>Usuarios registrados</h1></div>
+    <a class="button secondary" href="{{ url_for('admin_dashboard') }}">Volver al panel</a>
+  </div>
+  {% if users %}
+    <div class="panel table-wrap">
+      <table>
+        <thead>
+          <tr><th>Nombre</th><th>Usuario</th><th>Documento</th><th>Contacto</th><th>Registro</th><th>Último ingreso</th><th>Pruebas</th><th>Estado</th><th>Acción</th></tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+            <tr>
+              <td>{{ user.first_name }} {{ user.second_name or "" }}
+                  {{ user.first_surname }} {{ user.second_surname or "" }}</td>
+              <td>{{ user.username }}<br><span class="muted">{{ user.email }}</span></td>
+              <td>{{ user.document_id or "—" }}</td>
+              <td>{{ user.primary_phone }}{% if user.secondary_phone %}<br>{{ user.secondary_phone }}{% endif %}</td>
+              <td>{{ user.registration_date|datetime }}</td>
+              <td>{{ user.last_login_at|datetime if user.last_login_at else "Nunca" }}</td>
+              <td>{{ user.exam_count }}</td>
+              <td>{{ "Activo" if user.status == "active" else "Inactivo" }}</td>
+              <td>
+                <form method="post" action="{{ url_for('set_user_status', user_id=user.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  {% if user.status == "active" %}
+                    <input type="hidden" name="status" value="inactive">
+                    <button class="button secondary" type="submit">Desactivar</button>
+                  {% else %}
+                    <input type="hidden" name="status" value="active">
+                    <button class="button" type="submit">Activar</button>
+                  {% endif %}
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="panel muted">No hay usuarios registrados.</p>
+  {% endif %}
+{% endblock %}

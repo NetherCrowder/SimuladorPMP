@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Bancos de preguntas · Administración PMP{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div><p class="eyebrow">Administración</p><h1>Bancos de preguntas</h1></div>
+    <a class="button secondary" href="{{ url_for('admin_dashboard') }}">Volver al panel</a>
+  </div>
+
+  <nav class="admin-nav" aria-label="Acciones de bancos">
+    <a class="button" href="{{ url_for('new_admin_question', kind='manual') }}">Agregar pregunta manual</a>
+    <a class="button secondary" href="{{ url_for('new_admin_question', kind='automated') }}">Agregar pregunta automática</a>
+  </nav>
+
+  <section class="panel">
+    <h2>Banco manual</h2>
+    {% if manual %}
+      <div class="table-wrap"><table>
+        <thead><tr><th>Pregunta</th><th>Fecha de adición</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody>
+          {% for entry in manual %}
+            <tr>
+              <td>{{ entry.question }}</td>
+              <td>{{ entry.added_at|datetime }}</td>
+              <td>{{ "Activa" if entry.status == "active" else "Inactiva" }}</td>
+              <td class="actions">
+                <a href="{{ url_for('edit_admin_question', kind='manual', bank_id=entry.id) }}">Editar</a>
+                <form method="post" action="{{ url_for('set_admin_question_status', kind='manual', bank_id=entry.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  {% if entry.status == "active" %}
+                    <input type="hidden" name="status" value="inactive">
+                    <button class="link-button" type="submit">Desactivar</button>
+                  {% else %}
+                    <input type="hidden" name="status" value="active">
+                    <button class="link-button" type="submit">Activar</button>
+                  {% endif %}
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+    {% else %}
+      <p class="muted">El banco manual está vacío.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Banco automático</h2>
+    {% if automated %}
+      <div class="table-wrap"><table>
+        <thead><tr><th>Pregunta</th><th>Fecha</th><th>Validación</th><th>Disponible</th><th>Acciones</th></tr></thead>
+        <tbody>
+          {% for entry in automated %}
+            <tr>
+              <td>{{ entry.question }}</td>
+              <td>{{ entry.added_at|datetime }}</td>
+              <td>{{ {"pending": "Pendiente", "approved": "Aprobada", "rejected": "Rechazada"}[entry.validation_status] }}</td>
+              <td>{{ "Sí" if entry.active else "No" }}</td>
+              <td class="actions">
+                <a href="{{ url_for('edit_admin_question', kind='automated', bank_id=entry.id) }}">Editar</a>
+                {% if entry.validation_status != "approved" %}
+                  <form method="post" action="{{ url_for('set_admin_question_status', kind='automated', bank_id=entry.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="validation_status" value="approved">
+                    <button class="link-button" type="submit">Aprobar</button>
+                  </form>
+                {% endif %}
+                {% if entry.validation_status != "rejected" %}
+                  <form method="post" action="{{ url_for('set_admin_question_status', kind='automated', bank_id=entry.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="validation_status" value="rejected">
+                    <button class="link-button" type="submit">Rechazar</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+    {% else %}
+      <p class="muted">El banco automático está vacío.</p>
+    {% endif %}
+  </section>
+{% endblock %}

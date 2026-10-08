@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Administración · Simulador PMP{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">{{ "Owner" if g.user.account_role == "owner" else "Administrador" }}</p>
+      <h1>Panel de administración</h1>
+      <p class="muted">Hola, {{ g.user.first_name or g.user.username }}.</p>
+    </div>
+  </div>
+
+  <nav class="admin-nav" aria-label="Secciones de administración">
+    <a class="button secondary" href="{{ url_for('admin_users') }}">Usuarios registrados</a>
+    <a class="button secondary" href="{{ url_for('admin_questions') }}">Bancos de preguntas</a>
+    {% if g.user.account_role == "owner" %}
+      <a class="button secondary" href="{{ url_for('admin_administrators') }}">Administradores</a>
+    {% endif %}
+  </nav>
+
+  <section class="stat-grid" aria-label="Resumen de administración">
+    <div class="stat-card"><strong>{{ counts.users }}</strong><span>Usuarios registrados</span></div>
+    <div class="stat-card"><strong>{{ counts.manual_questions }}</strong><span>Preguntas manuales</span></div>
+    <div class="stat-card"><strong>{{ counts.automated_questions }}</strong><span>Preguntas automáticas</span></div>
+    <div class="stat-card"><strong>{{ counts.pending_questions }}</strong><span>Automáticas pendientes de validación</span></div>
+  </section>
+
+  <section class="panel">
+    <div class="section-heading">
+      <h2>Registros recientes</h2>
+      <a href="{{ url_for('admin_users') }}">Ver usuarios</a>
+    </div>
+    {% if recent_users %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Usuario</th><th>Correo</th><th>Registro</th><th>Estado</th></tr></thead>
+          <tbody>
+            {% for user in recent_users %}
+              <tr>
+                <td>{{ user.first_name }} {{ user.second_name or "" }}
+                    {{ user.first_surname }} {{ user.second_surname or "" }}</td>
+                <td>{{ user.email }}</td>
+                <td>{{ user.registration_date|datetime }}</td>
+                <td>{{ "Activo" if user.status == "active" else "Inactivo" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Aún no hay usuarios registrados.</p>
+    {% endif %}
+  </section>
+{% endblock %}
