@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Administradores · Simulador PMP{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div><p class="eyebrow">Owner</p><h1>Administradores</h1></div>
+    <a class="button secondary" href="{{ url_for('admin_dashboard') }}">Volver al panel</a>
+  </div>
+
+  <section class="form-card">
+    <h2>Crear administrador</h2>
+    <form method="post" action="{{ url_for('create_administrator') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Nombre de usuario<input name="username" minlength="3" maxlength="40" required></label>
+      <label>Primer nombre<input name="first_name" autocomplete="given-name" required></label>
+      <label>Segundo nombre<input name="second_name" autocomplete="additional-name"></label>
+      <label>Primer apellido<input name="first_surname" autocomplete="family-name" required></label>
+      <label>Segundo apellido<input name="second_surname"></label>
+      <label>Documento de ID<input name="document_id"></label>
+      <label>Teléfono principal (+ código de país)
+        <input name="primary_phone" type="tel" placeholder="+573001234567"
+               pattern="\+[1-9][0-9]{7,14}" autocomplete="tel" required>
+      </label>
+      <label>Teléfono secundario (opcional)
+        <input name="secondary_phone" type="tel" placeholder="+573001234567"
+               pattern="\+[1-9][0-9]{7,14}" autocomplete="tel">
+      </label>
+      <label>Correo electrónico<input name="email" type="email" required></label>
+      <label>Edad<input name="age" type="number" min="1" max="120"></label>
+      <label>ID empresarial<input name="business_id"></label>
+      <label>Contraseña (mínimo 10 caracteres)<input name="password" type="password" minlength="10" required></label>
+      <label>Confirmar contraseña<input name="confirmation" type="password" minlength="10" required></label>
+      <button class="button" type="submit">Crear administrador</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Cuentas de administrador</h2>
+    {% if administrators %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Nombre</th><th>Usuario</th><th>Correo</th><th>Documento</th><th>Contacto</th><th>ID empresarial</th><th>Estado</th><th>Acción</th></tr></thead>
+          <tbody>
+            {% for administrator in administrators %}
+              <tr>
+                <td>{{ administrator.first_name }} {{ administrator.second_name or "" }}
+                    {{ administrator.first_surname }} {{ administrator.second_surname or "" }}</td>
+                <td>{{ administrator.username }}</td>
+                <td>{{ administrator.email }}</td>
+                <td>{{ administrator.document_id or "—" }}<br>{{ administrator.primary_phone }}
+                    {% if administrator.secondary_phone %}<br>{{ administrator.secondary_phone }}{% endif %}</td>
+                <td>{{ administrator.business_id or "—" }}</td>
+                <td>{{ "Activo" if administrator.status == "active" else "Inactivo" }}</td>
+                <td class="admin-actions">
+                  <form method="post" action="{{ url_for('set_administrator_status', admin_id=administrator.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    {% if administrator.status == "active" %}
+                      <input type="hidden" name="status" value="inactive">
+                      <button class="button secondary" type="submit">Desactivar</button>
+                    {% else %}
+                      <input type="hidden" name="status" value="active">
+                      <button class="button" type="submit">Activar</button>
+                    {% endif %}
+                  </form>
+                  <form method="post" action="{{ url_for('delete_administrator', admin_id=administrator.id) }}" onsubmit="return confirm('¿Eliminar definitivamente esta cuenta de administrador?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="link-button danger-link" type="submit">Eliminar</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Todavía no hay administradores.</p>
+    {% endif %}
+  </section>
+{% endblock %}

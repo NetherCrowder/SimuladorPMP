@@ -8,6 +8,29 @@
       <label>Nombre de usuario
         <input name="username" minlength="3" maxlength="40" autocomplete="username" required>
       </label>
+      <label>Primer nombre
+        <input name="first_name" autocomplete="given-name" required>
+      </label>
+      <label>Segundo nombre
+        <input name="second_name" autocomplete="additional-name">
+      </label>
+      <label>Primer apellido
+        <input name="first_surname" autocomplete="family-name" required>
+      </label>
+      <label>Segundo apellido
+        <input name="second_surname">
+      </label>
+      <label>Documento de ID
+        <input name="document_id" autocomplete="off">
+      </label>
+      <label>Teléfono principal (con código de país)
+        <input name="primary_phone" type="tel" placeholder="+573001234567"
+               pattern="\+[1-9][0-9]{7,14}" autocomplete="tel" required>
+      </label>
+      <label>Teléfono secundario (opcional, con código de país)
+        <input name="secondary_phone" type="tel" placeholder="+573001234567"
+               pattern="\+[1-9][0-9]{7,14}" autocomplete="tel">
+      </label>
       <label>Correo electrónico
         <input type="email" name="email" autocomplete="email" required>
       </label>

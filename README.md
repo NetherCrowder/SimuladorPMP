@@ -1,21 +1,65 @@
 # Simulador PMP
 
-Prototipo local de práctica de exámenes con Python, Flask y SQLite. Esta primera etapa se centra en la plataforma; no integra generación de preguntas con IA.
+Prototipo de práctica de exámenes con Python, Flask y PostgreSQL. La aplicación requiere una conexión a PostgreSQL; no crea ni usa una base de datos local.
 
-## Ejecutar localmente
+## Crear la base y ejecutar la aplicación
 
-En PowerShell, desde la carpeta del proyecto:
+Primero, crea la base de datos en tu servidor PostgreSQL, por ejemplo desde `psql` conectado con un usuario autorizado:
+
+```sql
+CREATE DATABASE simulador_pmp;
+```
+
+El esquema actualizado usa `UUID` (el equivalente de PostgreSQL a `UNIQUEIDENTIFIER`) para las cuentas. Debe instalarse en una base nueva y vacía; no ejecutes esta versión sobre la base anterior con IDs `SERIAL`. Si necesitas conservar datos de esa base, haz una copia antes de decidir cómo trasladarlos.
+
+Desde PowerShell, instala las dependencias, define la conexión y ejecuta la aplicación:
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+$env:DB_HOST = "localhost"
+$env:DB_NAME = "simulador_pmp"
+$env:DB_USER = "postgres"
+$env:DB_PASSWORD = "TU_CONTRASEÑA"
+$env:DB_PORT = "5432"
+$env:SIMULADOR_SECRET_KEY = "define-una-clave-segura"
+python .\conexion.py
 python app.py
 ```
 
-Abre `http://127.0.0.1:5000`. La base SQLite y una clave local para sesiones se crean automáticamente dentro de `instance\`. Para cambiar la clave de sesión, define `SIMULADOR_SECRET_KEY` antes de iniciar Flask. No uses la clave local generada automáticamente como estrategia de configuración para un despliegue público.
+La conexión se configura en el archivo `conexion.py`, en `database_config_from_env()` y `connect_database()`. Estos campos reflejan directamente el ejemplo de conexión: `host`, `database`, `user`, `password` y `port`. Cambia las variables de entorno para apuntar a otro servidor. La contraseña no se almacena en el código. `python .\conexion.py` ejecuta manualmente `check_database_connection()` y verifica la conexión y una consulta al servidor/base; devuelve un mensaje de error y código de salida distinto de cero si falla.
 
-La base de datos también puede inicializarse mediante `python -m flask --app app init-db`.
+Al iniciar, la aplicación se conecta a la base nueva y crea las tablas definidas en `schema_postgres.sql`. También puedes inicializarlas explícitamente con `python -m flask --app app init-db`. La aplicación necesita permisos para crear tablas, pero no crea la base de datos en el servidor.
+
+## Cuenta Owner y administración
+
+Después de configurar PostgreSQL y crear el esquema, crea la cuenta inicial Owner desde PowerShell. El asistente solicita nombre de usuario, primer nombre, primer apellido, teléfono principal internacional (`+` y código de país), correo y contraseña. Los segundos nombres/apellidos, documento de ID y teléfono secundario son opcionales:
+
+```powershell
+python -m flask --app app create-owner
+```
+
+La contraseña se oculta mientras se escribe. No hay credenciales Owner predeterminadas. El Owner y los Administradores acceden al panel desde **Administración**. Ambos pueden consultar y activar/desactivar usuarios, crear/editar preguntas manuales y automáticas y aprobar/rechazar las automáticas. Solo el Owner puede crear, desactivar o eliminar Administradores.
+
+Las pruebas de integración usan PostgreSQL. Define `TEST_DATABASE_URL` para una base de pruebas dedicada; cada caso crea y elimina su propio esquema dentro de esa base:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://USUARIO:CLAVE@localhost:5432/simulador_pmp_test"
+python -m unittest discover -s tests -v
+```
+
+## Esquema y datos nuevos
+
+El esquema se define exclusivamente en `schema_postgres.sql`. Al iniciar la aplicación se crean las tablas y los catálogos de clasificación; no se agregan preguntas de demostración ni se importan datos anteriores. El banco de preguntas comienza vacío y se llenará con las nuevas preguntas.
+
+El esquema incluye:
+
+- Cuentas de usuario y superusuario identificadas con UUID de PostgreSQL. Primer nombre, primer apellido y teléfono principal son obligatorios; segundos nombres/apellidos, documento de ID y teléfono secundario son opcionales. Los teléfonos se guardan con código de país.
+- Perfil e historial de preguntas de usuarios.
+- Superusuarios o administradores.
+- Banco de preguntas manuales.
+- Banco de preguntas automáticas con validación.
 
 ## Funcionalidad del prototipo
 
@@ -26,25 +70,19 @@ La base de datos también puede inicializarse mediante `python -m flask --app ap
 - Pruebas de 30, 60, 75 o 180 preguntas, únicamente cuando existen suficientes preguntas compatibles para el tamaño elegido. Cada pregunta aporta 76 segundos al temporizador global.
 - Preguntas no contestadas o marcadas como guardadas quedan pendientes. Al terminar, se pueden revisar las correctas, incorrectas, ambas o pendientes. Cada opción de respuesta tiene su propia retroalimentación sobre por qué es correcta o incorrecta; las preguntas pendientes no revelan la respuesta. No se muestran tips.
 
-## Datos de demostración y alcance
+## Alcance
 
-El contenido de ejemplo es ficticio y sirve para probar la interfaz, los filtros y el flujo de examen; no representa preguntas oficiales del PMP ni material de estudio válido. El banco inicial no necesariamente contiene suficientes preguntas para iniciar las pruebas más largas. No incluye panel administrativo ni generación real con IA; esos contenidos se podrán reemplazar o integrar posteriormente.
+La aplicación no incluye preguntas de muestra. Hasta que se agreguen preguntas al banco, no habrá contenido disponible para iniciar una prueba. La administración incluye paneles Owner/Administrador; no incluye generación real con IA.
 
 ## Investigación de clasificación
 
 Se verificaron las fuentes oficiales disponibles al 6 de octubre de 2026:
 
 - El [ECO PMP 2026 (PDF)](https://www.pmi.org/-/media/pmi/documents/public/pdf/certifications/pmp/pmp-examination-content-outline.pdf?rev=b8e1618215b74dfc926f5b406567f072) identifica la actualización del examen de julio de 2026 (p. 2) y señala que fue revisado el 11 de agosto de 2026 (pie de página, p. 4). Sus dominios y ponderaciones son Personas (33 %), Procesos (41 %) y Entorno Empresarial (26 %) (p. 5).
-- El mismo ECO declara: “Predictive, adaptive/agile, and hybrid management approaches will be found throughout the three domain areas listed above and are not isolated to any particular domain or task” (p. 5). Por lo tanto, **las nueve combinaciones** entre Predictiva/Ágil/Híbrida y Personas/Procesos/Entorno Empresarial están permitidas; no se restringe ninguna de ellas.
+- El mismo ECO indica que los enfoques predictivo, adaptativo/ágil e híbrido aparecen en los tres dominios y no están aislados de ninguno (p. 5). Por tanto, se permiten las nueve combinaciones entre enfoques y dominios ECO.
 - El ECO estima aproximadamente 40 % de preguntas predictivas y reparte el 60 % restante entre adaptativas/ágiles e híbridas; también advierte que los conteos exactos varían por forma de examen (p. 5). No se aplican cuotas por enfoque ni por dominio ECO en cada prueba.
 - PMI identifica [PMBOK® Guide, Octava Edición](https://www.pmi.org/standards/pmbok) como publicada en noviembre de 2025. Su [tabla de contenidos oficial (PDF)](https://www.pmi.org/-/media/pmi/documents/public/pdf/publications/pmbok-guide-eighth-edition_table-of-contents.pdf) enumera Gobernanza, Alcance, Cronograma, Finanzas, Interesados, Recursos y Riesgo como dominios de desempeño (pp. 7–8).
 
 PMI no publica en esas fuentes una matriz de correspondencia uno-a-uno entre los siete dominios de desempeño PMBOK y los tres dominios ECO, ni combinaciones excluidas entre ellos. La aplicación conserva estos catálogos como dimensiones de clasificación independientes y solo aplica la regla explícita del ECO: los enfoques metodológicos no están aislados de ningún dominio ECO.
 
-La aplicación inicializa en `valid_combinations` las nueve parejas permitidas, valida los filtros del simulador y protege las etiquetas de preguntas frente a combinaciones metodológicas/ECO no registradas. Las nueve preguntas ficticias iniciales están distribuidas por estas parejas para probar los filtros; sus etiquetas no constituyen una clasificación educativa oficial.
-
-## Pruebas
-
-```powershell
-python -m unittest discover -s tests -v
-```
+La aplicación inicializa en `valid_combinations` las nueve parejas permitidas, valida los filtros del simulador y protege las etiquetas de preguntas frente a combinaciones metodológicas/ECO no registradas.
