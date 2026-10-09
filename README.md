@@ -60,15 +60,18 @@ El esquema incluye:
 - Superusuarios o administradores.
 - Banco de preguntas manuales.
 - Banco de preguntas automáticas con validación.
+- Reactivos tipados: Case/Scenario Set, Visual-Based, Multiple Choice, Multiple Responses, Drag and Drop, Hotspot y Pull-Down List.
 
 ## Funcionalidad del prototipo
 
 - Registro e inicio/cierre de sesión; las contraseñas se almacenan como hashes.
-- Aviso y bloqueo de experiencia para agentes de usuario detectados como móviles. Esta detección es orientativa y puede falsificarse; no es un control de seguridad.
+- El acceso desde dispositivos móviles está prohibido; la aplicación bloquea las solicitudes con agentes de usuario móviles.
 - Selección de dominios de desempeño, enfoque metodológico y dominio oficial ECO, sujeta al catálogo de combinaciones permitidas.
 - Bancos general y personal: las preguntas seleccionadas por una prueba se añaden al banco del usuario; se pueden consultar las usadas, pendientes y favoritas. Se admite el tipo de fuente `automated` para una futura integración.
 - Pruebas de 30, 60, 75 o 180 preguntas, únicamente cuando existen suficientes preguntas compatibles para el tamaño elegido. Cada pregunta aporta 76 segundos al temporizador global.
-- Preguntas no contestadas o marcadas como guardadas quedan pendientes. Al terminar, se pueden revisar las correctas, incorrectas, ambas o pendientes. Cada opción de respuesta tiene su propia retroalimentación sobre por qué es correcta o incorrecta; las preguntas pendientes no revelan la respuesta. No se muestran tips.
+- La administración permite crear y editar los siete tipos de reactivo, buscar preguntas y filtrar los bancos por tipo y estado. El formulario conserva los datos al corregir errores, guía la cantidad de subpreguntas de un caso y valida los campos requeridos según el tipo. Los casos incluyen de 3 a 5 subpreguntas; los tipos visuales aceptan imágenes PNG, JPG o WebP de hasta 5 MB, guardadas bajo `static/uploads/questions`.
+- La prueba presenta progreso, temporizador y una navegación filtrable por formato y estado. Muestra los casos en una vista dividida con navegación por subpregunta, permite ampliar los gráficos Visual-Based, limitar y validar las selecciones múltiples, emparejar fichas, seleccionar puntos Hotspot y completar párrafos con desplegables en línea. Las opciones Multiple Choice admiten formato enriquecido seguro con `**negritas**`, `*cursiva*` y `` `código` ``.
+- Preguntas no contestadas o guardadas quedan pendientes; al terminar se pueden revisar correctas, incorrectas, ambas o pendientes.
 
 ## Alcance
 

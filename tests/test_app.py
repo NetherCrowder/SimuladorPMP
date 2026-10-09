@@ -7,15 +7,22 @@ from unittest.mock import Mock, patch
 from urllib.parse import urlencode, urlsplit
 
 import psycopg2
+from flask import Flask
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from psycopg2.extensions import parse_dsn
 from app import (
     create_app,
     create_superuser_account,
+    exam_response_is_correct,
     get_db,
     init_db,
     normalize_phone_number,
+    parse_option_indexes,
+    parse_exam_response,
+    prepare_exam_question,
+    question_form_values,
+    render_rich_option,
 )
 from conexion import connect_database, database_config_from_env
 from werkzeug.security import check_password_hash
@@ -142,6 +149,228 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
         self.assertIn("/admin/users/<uuid:user_id>/status", routes)
         self.assertIn("/admin/administrators/<uuid:admin_id>/status", routes)
         self.assertIn("/admin/questions/<kind>/<int:bank_id>/edit", routes)
+        client = app.test_client()
+        mobile_response = client.get(
+            "/", headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17) Mobile"}
+        )
+        self.assertEqual(mobile_response.status_code, 403)
+        desktop_response = client.get(
+            "/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        self.assertEqual(desktop_response.status_code, 200)
+
+
+class QuestionTypeResponseTestCase(unittest.TestCase):
+    def test_rich_option_formatting_escapes_html(self):
+        rendered = str(render_rich_option("**bold** and *italic* <script>alert(1)</script>"))
+        self.assertIn("<strong>bold</strong>", rendered)
+        self.assertIn("<em>italic</em>", rendered)
+        self.assertNotIn("<script>", rendered)
+        self.assertIn("&lt;script&gt;", rendered)
+
+    def test_prepared_exam_question_keeps_selection_count_not_answer_key(self):
+        question = {
+            "options_json": '["A","B","C","D"]',
+            "content_json": "{}",
+            "correct_answer_json": "[1,3]",
+            "response_json": None,
+            "selected_option": None,
+            "question_type": "multiple_responses",
+        }
+        prepare_exam_question(question)
+        self.assertEqual(question["selection_limit"], 2)
+        self.assertNotIn("correct_answer", question)
+
+    def test_multiple_response_requires_exact_selected_count(self):
+        app = Flask(__name__)
+        question = {
+            "question_type": "multiple_responses",
+            "options_json": '["A","B","C","D"]',
+            "content_json": "{}",
+            "correct_answer_json": "[0,2]",
+        }
+        with app.test_request_context(
+            "/", method="POST", data={"selected_options": ["0"]}
+        ):
+            with self.assertRaisesRegex(ValueError, "exactamente 2"):
+                parse_exam_response(question)
+        with app.test_request_context(
+            "/", method="POST", data={"selected_options": ["0", "1", "2"]}
+        ):
+            with self.assertRaisesRegex(ValueError, "exactamente 2"):
+                parse_exam_response(question)
+
+    def test_fill_in_blanks_can_reuse_an_option(self):
+        errors = []
+        self.assertEqual(
+            parse_option_indexes(
+                "2\n2", 4, errors, allow_duplicates=True
+            ),
+            [1, 1],
+        )
+        self.assertEqual(errors, [])
+
+    def test_multiple_response_and_case_answers_are_parsed(self):
+        app = Flask(__name__)
+        with app.test_request_context("/", method="POST", data={"selected_option": "2"}):
+            self.assertEqual(
+                parse_exam_response(
+                    {
+                        "question_type": "multiple_choice",
+                        "options_json": '["A","B","C","D"]',
+                        "content_json": "{}",
+                    }
+                ),
+                2,
+            )
+
+        with app.test_request_context(
+            "/", method="POST", data={"selected_options": ["0", "2"]}
+        ):
+            self.assertEqual(
+                parse_exam_response(
+                    {
+                        "question_type": "multiple_responses",
+                        "options_json": '["A","B","C","D"]',
+                        "content_json": "{}",
+                        "correct_answer_json": "[0,2]",
+                    }
+                ),
+                [0, 2],
+            )
+
+        with app.test_request_context(
+            "/", method="POST", data={"case_answers": ["1", "2", "0"]}
+        ):
+            self.assertEqual(
+                parse_exam_response(
+                    {
+                        "question_type": "case_set",
+                        "options_json": "[]",
+                        "content_json": json.dumps(
+                            {
+                                "questions": [
+                                    {"options": ["A", "B", "C", "D"]},
+                                    {"options": ["A", "B", "C", "D"]},
+                                    {"options": ["A", "B", "C", "D"]},
+                                ]
+                            }
+                        ),
+                    }
+                ),
+                [1, 2, 0],
+            )
+
+        with app.test_request_context(
+            "/", method="POST", data={"drag_match": ["1", "0"]}
+        ):
+            self.assertEqual(
+                parse_exam_response(
+                    {
+                        "question_type": "drag_drop",
+                        "options_json": '["A","B"]',
+                        "content_json": '{"targets":["X","Y"]}',
+                    }
+                ),
+                [1, 0],
+            )
+
+    def test_hotspot_and_blank_responses_are_parsed(self):
+        app = Flask(__name__)
+        with app.test_request_context(
+            "/", method="POST", data={"hotspot_point": "20.5,45"}
+        ):
+            self.assertEqual(
+                parse_exam_response(
+                    {
+                        "question_type": "hotspot",
+                        "options_json": "[]",
+                        "content_json": "{}",
+                    }
+                ),
+                {"x": 20.5, "y": 45.0},
+            )
+
+        with app.test_request_context(
+            "/", method="POST", data={"blank_answers": ["1", "0"]}
+        ):
+            self.assertEqual(
+                parse_exam_response(
+                    {
+                        "question_type": "pull_down",
+                        "options_json": '["A","B"]',
+                        "content_json": '{"prompt_parts":["A "," and "," C"]}',
+                    }
+                ),
+                [1, 0],
+            )
+
+    def test_structured_answers_are_scored_as_a_whole(self):
+        self.assertTrue(
+            exam_response_is_correct(
+                {
+                    "question_type": "multiple_responses",
+                    "correct_answer_json": "[0, 2]",
+                    "response_json": "[2, 0]",
+                }
+            )
+        )
+        self.assertTrue(
+            exam_response_is_correct(
+                {
+                    "question_type": "case_set",
+                    "correct_answer_json": "[0, 1, 2]",
+                    "response_json": "[0, 1, 2]",
+                }
+            )
+        )
+        self.assertFalse(
+            exam_response_is_correct(
+                {
+                    "question_type": "multiple_responses",
+                    "correct_answer_json": "[0, 2]",
+                    "response_json": "[0]",
+                }
+            )
+        )
+        self.assertTrue(
+            exam_response_is_correct(
+                {
+                    "question_type": "hotspot",
+                    "correct_answer_json": '{"x":20,"y":30,"width":10,"height":15}',
+                    "response_json": '{"x":25,"y":40}',
+                }
+            )
+        )
+
+
+class QuestionFormValuesTestCase(unittest.TestCase):
+    def test_invalid_edit_preserves_the_selected_correct_option(self):
+        app = Flask(__name__)
+        question = {
+            "prompt": "Pregunta original",
+            "explanation": "Retroalimentación original",
+            "question_type": "multiple_choice",
+            "options_json": '["A","B","C","D"]',
+            "content_json": "{}",
+            "correct_answer_json": "0",
+        }
+        submitted = {
+            "prompt": "Pregunta editada",
+            "explanation": "Retroalimentación editada",
+            "question_type": "multiple_choice",
+            "options": "A\nB\nC\nD",
+            "correct_option": "3",
+        }
+
+        with app.test_request_context("/", method="POST", data=submitted):
+            values = question_form_values(
+                question,
+                {"official": [], "methodology": [], "performance": []},
+            )
+
+        self.assertEqual(values["prompt"], "Pregunta editada")
+        self.assertEqual(values["correct_option"], "3")
 
 
 class SimulatorTestCase(unittest.TestCase):
@@ -425,13 +654,6 @@ class SimulatorTestCase(unittest.TestCase):
             ).fetchone()["count"]
         self.assertEqual(account_count, 0)
 
-    def test_mobile_browser_is_blocked(self):
-        response = self.client.get(
-            "/", headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17) Mobile"}
-        )
-        self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Acceso desde computadora", response.data)
-
     def test_all_methodology_and_eco_domain_pairs_are_allowed(self):
         with self.connect() as db:
             pairs = {
@@ -502,7 +724,8 @@ class SimulatorTestCase(unittest.TestCase):
         )
         question_data = {
             "prompt": "Pregunta administrativa",
-            "options": "Primera opción\nSegunda opción",
+            "question_type": "multiple_choice",
+            "options": "Primera opción\nSegunda opción\nTercera opción\nCuarta opción",
             "correct_option": "2",
             "explanation": "La segunda opción es correcta.",
             "official_domains": ["processes"],
@@ -522,13 +745,60 @@ class SimulatorTestCase(unittest.TestCase):
                 ("Pregunta administrativa",),
             ).fetchone()
             manual_question = db.execute(
-                "SELECT source_type, correct_option, active FROM questions WHERE id = %s",
+                "SELECT source_type, correct_option, question_type, active "
+                "FROM questions WHERE id = %s",
                 (manual["question_id"],),
             ).fetchone()
         self.assertEqual(manual["status"], "active")
         self.assertEqual(manual_question["source_type"], "general")
         self.assertEqual(manual_question["correct_option"], 1)
+        self.assertEqual(manual_question["question_type"], "multiple_choice")
         self.assertEqual(manual_question["active"], 1)
+
+        response = self.client.post(
+            "/admin/questions/new?kind=manual",
+            data={
+                **question_data,
+                "prompt": "Selecciona ambas respuestas.",
+                "question_type": "multiple_responses",
+                "correct_options": "1\n3",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.connect() as db:
+            multiple = db.execute(
+                "SELECT q.question_type, q.correct_answer_json "
+                "FROM questions q JOIN manual_question_bank b ON b.question_id = q.id "
+                "WHERE b.question = %s",
+                ("Selecciona ambas respuestas.",),
+            ).fetchone()
+        self.assertEqual(multiple["question_type"], "multiple_responses")
+        self.assertEqual(json.loads(multiple["correct_answer_json"]), [0, 2])
+
+        case_data = {
+            **question_data,
+            "prompt": "Caso de proyecto: el equipo detecta un riesgo crítico.",
+            "question_type": "case_set",
+        }
+        for index in range(1, 4):
+            case_data[f"case_prompt_{index}"] = f"Decisión encadenada {index}?"
+            case_data[f"case_options_{index}"] = (
+                "Primera\nSegunda\nTercera\nCuarta"
+            )
+            case_data[f"case_correct_{index}"] = str(index)
+        response = self.client.post(
+            "/admin/questions/new?kind=manual", data=case_data
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.connect() as db:
+            case = db.execute(
+                "SELECT q.content_json, q.correct_answer_json "
+                "FROM questions q JOIN manual_question_bank b ON b.question_id = q.id "
+                "WHERE b.question = %s",
+                (case_data["prompt"],),
+            ).fetchone()
+        self.assertEqual(len(json.loads(case["content_json"])["questions"]), 3)
+        self.assertEqual(json.loads(case["correct_answer_json"]), [0, 1, 2])
 
         response = self.client.post(
             "/admin/questions/new?kind=automated",

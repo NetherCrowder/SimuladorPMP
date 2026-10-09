@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% set editing = question is not none %}
 {% block title %}{{ "Editar" if editing else "Agregar" }} pregunta · Administración{% endblock %}
+{% block head %}<script defer src="{{ url_for('static', filename='question-form.js') }}"></script>{% endblock %}
 {% block content %}
   <div class="page-heading">
     <div>
@@ -10,18 +11,97 @@
     <a class="button secondary" href="{{ url_for('admin_questions') }}">Volver a bancos</a>
   </div>
 
-  <form class="panel admin-question-form" method="post">
+  <form class="panel admin-question-form" method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="kind" value="{{ kind }}">
-    <label>Pregunta
+    <label>Tipo de pregunta
+      <select name="question_type" id="question-type" required>
+        {% for key, details in question_types.items() %}
+          <option value="{{ key }}" {% if (question.question_type if editing else request.form.get("question_type", "multiple_choice")) == key %}selected{% endif %}>{{ details[0] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p id="question-type-description" class="muted" aria-live="polite"></p>
+
+    <label id="prompt-label">Pregunta
       <textarea name="prompt" rows="3" required>{{ question.prompt if editing else request.form.get("prompt", "") }}</textarea>
     </label>
-    <label>Opciones de respuesta (una por línea)
-      <textarea name="options" rows="5" required>{{ question.options_text if editing else request.form.get("options", "") }}</textarea>
-    </label>
-    <label>Número de la respuesta correcta (empezando en 1)
-      <input name="correct_option" type="number" min="1" value="{{ question.correct_option_form if editing else request.form.get("correct_option", 1) }}" required>
-    </label>
+    <section class="question-type-fields" data-question-type="multiple_choice visual_based multiple_responses pull_down">
+      <label>Opciones (una por línea; admite **negritas**, *cursiva* y `código`)
+        <textarea name="options" rows="5" data-required-for="multiple_choice visual_based multiple_responses pull_down">{{ question.options_text if editing else request.form.get("options", "") }}</textarea>
+      </label>
+    </section>
+    <section class="question-type-fields" data-question-type="multiple_choice visual_based">
+      <label>Número de la respuesta correcta (empezando en 1)
+        <input name="correct_option" type="number" min="1" max="4" data-required-for="multiple_choice visual_based" value="{{ question.correct_option if editing else request.form.get('correct_option', 1) }}">
+      </label>
+    </section>
+    <section class="question-type-fields" data-question-type="multiple_responses pull_down">
+      <label>Números de las respuestas correctas, uno por línea (empezando en 1)
+        <textarea name="correct_options" rows="3" data-required-for="multiple_responses pull_down">{{ question.correct_options if editing else request.form.get("correct_options", "") }}</textarea>
+      </label>
+    </section>
+    <p class="form-hint question-type-fields" data-question-type="pull_down">En el párrafo, escribe <code>[[blank]]</code> en cada espacio en blanco, en el mismo orden que las respuestas correctas.</p>
+
+    <section class="question-type-fields" data-question-type="case_set">
+      <p class="form-hint">Escribe el caso en el campo Pregunta y completa entre 3 y 5 reactivos encadenados.</p>
+      <label>Número de subpreguntas
+        <select id="case-question-count" name="case_question_count">
+          {% for count in range(3, 6) %}
+            <option value="{{ count }}" {% if (question.case_question_count if editing else request.form.get("case_question_count", "3"))|int == count %}selected{% endif %}>{{ count }} subpreguntas</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% for index in range(1, 6) %}
+        <fieldset class="panel case-question" data-case-editor="{{ index }}" {% if index > ((question.case_question_count if editing else request.form.get("case_question_count", "3"))|int) %}hidden{% endif %}>
+          <legend>Subpregunta {{ index }}</legend>
+          <label>Enunciado
+            <textarea name="case_prompt_{{ index }}" rows="2" required>{{ question["case_prompt_" ~ index] if editing else request.form.get("case_prompt_" ~ index, "") }}</textarea>
+          </label>
+          <label>Opciones (una por línea)
+            <textarea name="case_options_{{ index }}" rows="4" required>{{ question["case_options_" ~ index] if editing else request.form.get("case_options_" ~ index, "") }}</textarea>
+          </label>
+          <label>Número de la respuesta correcta
+            <input name="case_correct_{{ index }}" type="number" min="1" max="4" required value="{{ question['case_correct_' ~ index] if editing else request.form.get('case_correct_' ~ index, '') }}">
+          </label>
+        </fieldset>
+      {% endfor %}
+    </section>
+
+    <section class="question-type-fields" data-question-type="visual_based hotspot">
+      <label>Imagen o artefacto gráfico (PNG, JPG o WebP)
+        <input name="image" type="file" accept=".png,.jpg,.jpeg,.webp" {% if not editing or not question.content.get("image_path") %}required{% endif %}>
+      </label>
+      <div class="admin-artifact-preview" id="admin-artifact-preview" {% if not editing or not question.content.get("image_path") %}hidden{% endif %}>
+        <img class="question-artifact-preview" id="admin-artifact-image" {% if editing and question.content.get("image_path") %}src="{{ url_for('static', filename=question.content.image_path) }}"{% endif %} alt="Vista previa del artefacto gráfico">
+        <span class="hotspot-admin-region" id="hotspot-admin-region" aria-hidden="true"></span>
+      </div>
+    </section>
+
+    <section class="question-type-fields" data-question-type="drag_drop">
+      <p class="form-hint">Escribe cada concepto y destino en una línea. Para cada concepto, indica el número del destino correspondiente.</p>
+      <label>Conceptos
+        <textarea name="drag_items" rows="4" data-required-for="drag_drop">{{ question.drag_items if editing else request.form.get("drag_items", "") }}</textarea>
+      </label>
+      <label>Destinos
+        <textarea name="drag_targets" rows="4" data-required-for="drag_drop">{{ question.drag_targets if editing else request.form.get("drag_targets", "") }}</textarea>
+      </label>
+      <label>Destino correcto para cada concepto (un número por línea)
+        <textarea name="drag_matches" rows="4" data-required-for="drag_drop">{{ question.drag_matches if editing else request.form.get("drag_matches", "") }}</textarea>
+      </label>
+    </section>
+
+    <section class="question-type-fields" data-question-type="hotspot">
+      <p class="form-hint">Coordenadas de la zona correcta, expresadas como porcentaje del ancho y alto de la imagen.</p>
+      <div class="hotspot-coordinates">
+        {% for coordinate, label in [("x", "X inicial"), ("y", "Y inicial"), ("width", "Ancho"), ("height", "Alto")] %}
+          <label>{{ label }} (%)
+            <input name="hotspot_{{ coordinate }}" type="number" min="0" max="100" step="any" data-required-for="hotspot" value="{{ question['hotspot_' ~ coordinate] if editing else request.form.get('hotspot_' ~ coordinate, '') }}">
+          </label>
+        {% endfor %}
+      </div>
+    </section>
+
     <label>Retroalimentación
       <textarea name="explanation" rows="4" required>{{ question.explanation if editing else request.form.get("explanation", "") }}</textarea>
     </label>

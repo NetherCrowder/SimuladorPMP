@@ -1,4 +1,5 @@
 import json
+import html
 import math
 import os
 import re
@@ -22,6 +23,7 @@ from flask import (
     url_for,
 )
 from flask_wtf.csrf import CSRFProtect
+from markupsafe import Markup
 from conexion import connect_database, database_config_from_env
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -52,8 +54,38 @@ VALID_COMBINATIONS = tuple(
 )
 EXAM_LENGTHS = (30, 60, 75, 180)
 SECONDS_PER_QUESTION = 76
-MOBILE_USER_AGENT = re.compile(
-    r"android|iphone|ipod|ipad|windows phone|blackberry|opera mini|mobile",
+QUESTION_TYPES = {
+    "case_set": (
+        "Case/Scenario Set",
+        "Estudio de caso extenso seguido de 3 a 5 preguntas encadenadas.",
+    ),
+    "visual_based": (
+        "Visual-Based (Nuevo 2026)",
+        "Reactivo basado en un artefacto gráfico, como un tablero o dashboard.",
+    ),
+    "multiple_choice": (
+        "Multiple Choice (Tradicional)",
+        "Selección única de la mejor alternativa entre cuatro opciones.",
+    ),
+    "multiple_responses": (
+        "Multiple Responses",
+        "Reactivo con más de una opción correcta.",
+    ),
+    "drag_drop": (
+        "Drag and Drop",
+        "Emparejamiento de conceptos o acciones en dos columnas.",
+    ),
+    "hotspot": (
+        "Hotspot",
+        "Identificación directa de una zona en un diagrama o gráfico.",
+    ),
+    "pull_down": (
+        "Pull-Down List (Fill in the blank)",
+        "Párrafo con uno o varios espacios en blanco interactivos.",
+    ),
+}
+MOBILE_USER_AGENT_PATTERN = re.compile(
+    r"android|iphone|ipad|ipod|mobile|tablet|windows phone|iemobile|opera mini|blackberry|bb10",
     re.IGNORECASE,
 )
 
@@ -73,24 +105,27 @@ def persistent_secret(instance_path):
         return secret
 
 
+def render_rich_option(value):
+    escaped = html.escape(str(value), quote=True)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"\*(.+?)\*", r"<em>\1</em>", escaped)
+    escaped = re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
+    return Markup(escaped)
+
+
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
     os.makedirs(app.instance_path, exist_ok=True)
     app.config.from_mapping(
         SECRET_KEY=persistent_secret(app.instance_path),
         DATABASE_CONFIG=database_config_from_env(),
+        MAX_CONTENT_LENGTH=5 * 1024 * 1024,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
     )
     if test_config:
         app.config.update(test_config)
     csrf = CSRFProtect()
-
-    @app.before_request
-    def restrict_mobile_browsers():
-        if MOBILE_USER_AGENT.search(request.headers.get("User-Agent", "")):
-            return render_template("mobile_blocked.html"), 403
-        return None
 
     csrf.init_app(app)
 
@@ -100,17 +135,27 @@ def create_app(test_config=None):
         if db is not None:
             db.close()
 
+    @app.before_request
+    def block_mobile_devices():
+        if MOBILE_USER_AGENT_PATTERN.search(request.user_agent.string):
+            abort(403, description="El acceso desde dispositivos móviles no está permitido.")
+
     @app.context_processor
     def inject_taxonomies():
         return {
             "performance_domains": PERFORMANCE_DOMAINS,
             "methodologies": METHODOLOGIES,
             "eco_domains": ECO_DOMAINS,
+            "question_types": QUESTION_TYPES,
         }
 
     @app.template_filter("datetime")
     def format_datetime(timestamp):
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+
+    @app.template_filter("rich_option")
+    def rich_option_filter(value):
+        return render_rich_option(value)
 
     with app.app_context():
         init_db()
@@ -439,8 +484,9 @@ def create_app(test_config=None):
         question_rows = [
             dict(row)
             for row in db.execute(
-                "SELECT q.id, q.prompt, q.options_json, eq.position, eq.marked_saved, "
-                "a.selected_option "
+                "SELECT q.id, q.prompt, q.options_json, q.question_type, q.content_json, "
+                "q.correct_answer_json, eq.position, eq.marked_saved, "
+                "a.selected_option, a.response_json "
                 "FROM exam_questions eq JOIN questions q ON q.id = eq.question_id "
                 "LEFT JOIN exam_answers a ON a.exam_id = eq.exam_id "
                 "AND a.question_id = eq.question_id "
@@ -453,10 +499,15 @@ def create_app(test_config=None):
         except ValueError:
             current_position = 1
         current_position = min(max(current_position, 1), len(question_rows))
-        current = dict(question_rows[current_position - 1])
-        current["options"] = json.loads(current.pop("options_json"))
         for row in question_rows:
-            row["options"] = json.loads(row["options_json"])
+            prepare_exam_question(row)
+        current = question_rows[current_position - 1]
+        current["active_subquestion"] = 0
+        if current["question_type"] == "case_set":
+            active_subquestion = request.args.get("subquestion", 1, type=int) - 1
+            current["active_subquestion"] = min(
+                max(active_subquestion, 0), len(current["content"]["questions"]) - 1
+            )
         return render_template(
             "exam.html",
             exam=exam,
@@ -479,7 +530,8 @@ def create_app(test_config=None):
 
         question_id = request.form.get("question_id", type=int)
         question = db.execute(
-            "SELECT q.id, q.options_json, eq.position "
+            "SELECT q.id, q.options_json, q.question_type, q.content_json, "
+            "q.correct_answer_json, eq.position "
             "FROM exam_questions eq JOIN questions q ON q.id = eq.question_id "
             "WHERE eq.exam_id = %s AND q.id = %s",
             (exam_id, question_id),
@@ -489,19 +541,28 @@ def create_app(test_config=None):
 
         action = request.form.get("action")
         if action == "answer":
-            selected_option = request.form.get("selected_option", type=int)
-            options = json.loads(question["options_json"])
-            if selected_option is None or not 0 <= selected_option < len(options):
-                flash("Selecciona una respuesta válida.", "error")
+            try:
+                response = parse_exam_response(question)
+            except ValueError as error:
+                flash(str(error), "error")
                 return redirect(
                     url_for("take_exam", exam_id=exam_id, question=question["position"])
                 )
+            selected_option = response if isinstance(response, int) else 0
             db.execute(
                 "INSERT INTO exam_answers "
-                "(exam_id, question_id, selected_option, answered_at) "
-                "VALUES (%s, %s, %s, %s) ON CONFLICT(exam_id, question_id) DO UPDATE SET "
-                "selected_option = excluded.selected_option, answered_at = excluded.answered_at",
-                (exam_id, question_id, selected_option, time.time()),
+                "(exam_id, question_id, selected_option, response_json, answered_at) "
+                "VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT(exam_id, question_id) DO UPDATE SET "
+                "selected_option = excluded.selected_option, "
+                "response_json = excluded.response_json, answered_at = excluded.answered_at",
+                (
+                    exam_id,
+                    question_id,
+                    selected_option,
+                    json.dumps(response, ensure_ascii=False),
+                    time.time(),
+                ),
             )
             db.execute(
                 "UPDATE exam_questions SET marked_saved = 0 "
@@ -551,20 +612,24 @@ def create_app(test_config=None):
                 exam = owned_exam(db, exam_id)
             else:
                 return redirect(url_for("take_exam", exam_id=exam_id))
-        counts = db.execute(
-            "SELECT COUNT(*) AS total, "
-            "SUM(CASE WHEN eq.marked_saved = 0 "
-            "AND a.selected_option = q.correct_option THEN 1 ELSE 0 END) AS correct, "
-            "SUM(CASE WHEN a.selected_option IS NOT NULL "
-            "AND eq.marked_saved = 0 "
-            "AND a.selected_option != q.correct_option THEN 1 ELSE 0 END) AS incorrect, "
-            "SUM(CASE WHEN a.selected_option IS NULL OR eq.marked_saved = 1 "
-            "THEN 1 ELSE 0 END) AS pending "
+        rows = db.execute(
+            "SELECT q.question_type, q.content_json, q.correct_answer_json, "
+            "q.correct_option, eq.marked_saved, a.selected_option, a.response_json "
             "FROM exam_questions eq JOIN questions q ON q.id = eq.question_id "
             "LEFT JOIN exam_answers a ON a.exam_id = eq.exam_id "
             "AND a.question_id = eq.question_id WHERE eq.exam_id = %s",
             (exam_id,),
-        ).fetchone()
+        ).fetchall()
+        counts = {"total": len(rows), "correct": 0, "incorrect": 0, "pending": 0}
+        for row in rows:
+            if row["marked_saved"] or (
+                row["response_json"] is None and row["selected_option"] is None
+            ):
+                counts["pending"] += 1
+            elif exam_response_is_correct(row):
+                counts["correct"] += 1
+            else:
+                counts["incorrect"] += 1
         return render_template("results.html", exam=exam, counts=counts)
 
     @app.get("/exams/<int:exam_id>/review")
@@ -579,8 +644,9 @@ def create_app(test_config=None):
             abort(400, "Filtro no válido.")
         rows = db.execute(
             "SELECT q.id, q.prompt, q.options_json, q.option_feedback_json, "
-            "q.correct_option, q.explanation, "
-            "a.selected_option, eq.marked_saved, eq.position "
+            "q.correct_option, q.question_type, q.content_json, "
+            "q.correct_answer_json, q.explanation, a.selected_option, "
+            "a.response_json, eq.marked_saved, eq.position "
             "FROM exam_questions eq JOIN questions q ON q.id = eq.question_id "
             "LEFT JOIN exam_answers a ON a.exam_id = eq.exam_id "
             "AND a.question_id = eq.question_id WHERE eq.exam_id = %s "
@@ -592,12 +658,42 @@ def create_app(test_config=None):
             item = dict(row)
             item["options"] = json.loads(item.pop("options_json"))
             item["option_feedback"] = json.loads(item.pop("option_feedback_json"))
-            if item["selected_option"] is None or item["marked_saved"]:
+            item["content"] = json.loads(item.pop("content_json") or "{}")
+            item["correct_answer"] = json.loads(
+                item.pop("correct_answer_json") or str(item["correct_option"])
+            )
+            response = (
+                json.loads(item["response_json"])
+                if item["response_json"] is not None
+                else item["selected_option"]
+            )
+            item["review_prompt"] = item["prompt"]
+            if item["question_type"] == "pull_down":
+                blanks = response if response is not None else ["________"] * (
+                    len(item["content"]["prompt_parts"]) - 1
+                )
+                item["review_prompt"] = "".join(
+                    part + (item["options"][blanks[index]] if index < len(blanks) else "")
+                    for index, part in enumerate(item["content"]["prompt_parts"])
+                )
+            if response is None or item["marked_saved"]:
                 item["result"] = "pending"
-            elif item["selected_option"] == item["correct_option"]:
+            elif exam_response_is_correct(
+                {**item, "response_json": json.dumps(response)}
+            ):
                 item["result"] = "correct"
             else:
                 item["result"] = "incorrect"
+            item["user_answer_display"] = format_exam_answer(
+                item["question_type"], item["options"], item["content"], response
+            )
+            item["correct_answer_display"] = format_exam_answer(
+                item["question_type"],
+                item["options"],
+                item["content"],
+                item["correct_answer"],
+                correct=True,
+            )
             if kind == "both" and item["result"] in {"correct", "incorrect"}:
                 reviewed.append(item)
             elif kind == item["result"]:
@@ -821,12 +917,13 @@ def create_app(test_config=None):
         db = get_db()
         manual = db.execute(
             "SELECT b.id, b.question_id, b.question, b.added_at, b.status, "
+            "q.question_type, "
             "NULL AS validation_status, q.active "
             "FROM manual_question_bank b LEFT JOIN questions q ON q.id = b.question_id"
         ).fetchall()
         automated = db.execute(
             "SELECT b.id, b.question_id, b.question, b.added_at, b.status, "
-            "b.validation_status, q.active "
+            "b.validation_status, q.question_type, q.active "
             "FROM automated_question_bank b "
             "LEFT JOIN questions q ON q.id = b.question_id"
         ).fetchall()
@@ -1092,15 +1189,57 @@ def admin_question_selections():
 
 def question_form_values(question, selected):
     item = dict(question)
-    options = json.loads(item["options_json"])
-    item["options_text"] = "\n".join(options)
-    item["correct_option_form"] = item["correct_option"] + 1
+    item["options_text"] = "\n".join(json.loads(item["options_json"]))
+    item["question_type"] = item.get("question_type", "multiple_choice")
+    item["content"] = json.loads(item.get("content_json", "{}"))
+    item["correct_answer"] = json.loads(item.get("correct_answer_json", "0"))
+    item["correct_option"] = (
+        item["correct_answer"] + 1 if type(item["correct_answer"]) is int else ""
+    )
+    item["case_questions"] = item["content"].get("questions", [])
+    item["case_question_count"] = max(3, min(5, len(item["case_questions"]) or 3))
+    for index in range(5):
+        child = item["case_questions"][index] if index < len(item["case_questions"]) else {}
+        item[f"case_prompt_{index + 1}"] = child.get("prompt", "")
+        item[f"case_options_{index + 1}"] = "\n".join(child.get("options", []))
+        item[f"case_correct_{index + 1}"] = (
+            child.get("correct_option", 0) + 1 if child else ""
+        )
+    item["drag_items"] = item["options_text"]
+    item["drag_targets"] = "\n".join(item["content"].get("targets", []))
+    item["drag_matches"] = "\n".join(
+        str(value + 1) for value in item["correct_answer"]
+    ) if isinstance(item["correct_answer"], list) else ""
+    item["correct_options"] = "\n".join(
+        str(value + 1) for value in item["correct_answer"]
+    ) if isinstance(item["correct_answer"], list) else ""
+    hotspot = item["content"].get("hotspot", {})
+    item["hotspot_x"] = hotspot.get("x", "")
+    item["hotspot_y"] = hotspot.get("y", "")
+    item["hotspot_width"] = hotspot.get("width", "")
+    item["hotspot_height"] = hotspot.get("height", "")
     if request.method == "POST":
         item["prompt"] = request.form.get("prompt", item["prompt"])
         item["options_text"] = request.form.get("options", item["options_text"])
-        item["correct_option_form"] = request.form.get(
-            "correct_option", item["correct_option_form"]
+        item["question_type"] = request.form.get("question_type", item["question_type"])
+        item["case_question_count"] = request.form.get(
+            "case_question_count", item["case_question_count"]
         )
+        item["correct_option"] = request.form.get(
+            "correct_option", item["correct_option"]
+        )
+        item["correct_options"] = request.form.get("correct_options", item["correct_options"])
+        item["drag_items"] = request.form.get("drag_items", item["drag_items"])
+        item["drag_targets"] = request.form.get("drag_targets", item["drag_targets"])
+        item["drag_matches"] = request.form.get("drag_matches", item["drag_matches"])
+        for index in range(5):
+            for key in ("prompt", "options", "correct"):
+                form_key = f"case_{key}_{index + 1}"
+                item[form_key] = request.form.get(form_key, item.get(form_key, ""))
+        for key in ("x", "y", "width", "height"):
+            item[f"hotspot_{key}"] = request.form.get(
+                f"hotspot_{key}", item[f"hotspot_{key}"]
+            )
         item["explanation"] = request.form.get("explanation", item["explanation"])
     item["selected"] = selected
     return item
@@ -1109,21 +1248,145 @@ def question_form_values(question, selected):
 def save_admin_question(db, kind, bank_entry=None, existing_question=None):
     values = request.form
     prompt = values.get("prompt", "").strip()
-    options = [option.strip() for option in values.get("options", "").splitlines()]
-    options = [option for option in options if option]
     explanation = values.get("explanation", "").strip()
-    try:
-        correct_option = int(values.get("correct_option", "")) - 1
-    except ValueError:
-        correct_option = -1
+    question_type = values.get("question_type", "")
     selected = admin_question_selections()
     errors = []
     if not prompt or not explanation:
         errors.append("La pregunta y su retroalimentación son obligatorias.")
-    if len(options) < 2:
-        errors.append("Agrega al menos dos opciones de respuesta, una por línea.")
-    if not 0 <= correct_option < len(options):
-        errors.append("El número de respuesta correcta no coincide con las opciones.")
+    if question_type not in QUESTION_TYPES:
+        errors.append("Selecciona un tipo de pregunta válido.")
+
+    options = []
+    content = {}
+    correct_answer = 0
+    correct_option = 0
+    if question_type in {"multiple_choice", "visual_based", "multiple_responses", "pull_down"}:
+        options = [line.strip() for line in values.get("options", "").splitlines() if line.strip()]
+        if len(options) < 2:
+            errors.append("Agrega al menos dos opciones de respuesta, una por línea.")
+        if question_type in {"multiple_choice", "visual_based", "multiple_responses"} and len(options) != 4:
+            errors.append("Este tipo de pregunta requiere exactamente cuatro opciones.")
+        if question_type == "multiple_responses":
+            correct_answer = parse_option_indexes(values.get("correct_options", ""), len(options), errors)
+            if not 2 <= len(correct_answer) <= 3:
+                errors.append("Multiple Responses requiere dos o tres respuestas correctas.")
+        elif question_type == "pull_down":
+            blank_count = prompt.count("[[blank]]")
+            correct_answer = parse_option_indexes(
+                values.get("correct_options", ""),
+                len(options),
+                errors,
+                allow_duplicates=True,
+            )
+            if blank_count < 1 or blank_count != len(correct_answer):
+                errors.append("Usa un marcador [[blank]] por cada respuesta correcta del párrafo.")
+            content["prompt_parts"] = prompt.split("[[blank]]")
+        else:
+            try:
+                correct_option = int(values.get("correct_option", "")) - 1
+            except ValueError:
+                correct_option = -1
+            if not 0 <= correct_option < len(options):
+                errors.append("El número de respuesta correcta no coincide con las opciones.")
+            correct_answer = correct_option
+    elif question_type == "case_set":
+        children = []
+        for index in range(1, 6):
+            child_prompt = values.get(f"case_prompt_{index}", "").strip()
+            child_options = [
+                line.strip()
+                for line in values.get(f"case_options_{index}", "").splitlines()
+                if line.strip()
+            ]
+            child_correct_raw = values.get(f"case_correct_{index}", "").strip()
+            if not child_prompt and not child_options and not child_correct_raw:
+                continue
+            if not child_prompt or len(child_options) != 4:
+                errors.append(f"Completa la pregunta {index} del caso con cuatro opciones.")
+                continue
+            try:
+                child_correct = int(child_correct_raw) - 1
+            except ValueError:
+                child_correct = -1
+            if not 0 <= child_correct < len(child_options):
+                errors.append(f"Indica una respuesta correcta válida para la pregunta {index}.")
+                continue
+            children.append(
+                {
+                    "prompt": child_prompt,
+                    "options": child_options,
+                    "correct_option": child_correct,
+                }
+            )
+        if not 3 <= len(children) <= 5:
+            errors.append("Un Case/Scenario Set debe incluir entre 3 y 5 preguntas completas.")
+        content["questions"] = children
+        correct_answer = [child["correct_option"] for child in children]
+    elif question_type == "drag_drop":
+        options = [line.strip() for line in values.get("drag_items", "").splitlines() if line.strip()]
+        targets = [line.strip() for line in values.get("drag_targets", "").splitlines() if line.strip()]
+        correct_answer = parse_option_indexes(values.get("drag_matches", ""), len(targets), errors)
+        if len(options) < 2 or len(targets) < 2 or len(options) != len(correct_answer):
+            errors.append("Agrega conceptos, destinos y una correspondencia válida para cada concepto.")
+        content["targets"] = targets
+    elif question_type == "hotspot":
+        uploaded = request.files.get("image")
+        existing_content = {}
+        if existing_question is not None:
+            existing_content = json.loads(existing_question.get("content_json") or "{}")
+        image_path = existing_content.get("image_path")
+        if uploaded and uploaded.filename:
+            extension = os.path.splitext(uploaded.filename)[1].lower()
+            if extension not in {".png", ".jpg", ".jpeg", ".webp"}:
+                errors.append("La imagen del hotspot debe ser PNG, JPG o WebP.")
+            elif not supported_image_upload(uploaded, extension):
+                errors.append("El archivo no coincide con el formato de imagen indicado.")
+            else:
+                image_path = f"uploads/questions/{secrets.token_hex(16)}{extension}"
+                content["uploaded_image"] = uploaded
+        if not image_path and "uploaded_image" not in content:
+            errors.append("Sube una imagen para la pregunta Hotspot.")
+        try:
+            hotspot = {
+                key: float(values.get(f"hotspot_{key}", ""))
+                for key in ("x", "y", "width", "height")
+            }
+            if (
+                hotspot["x"] < 0 or hotspot["y"] < 0
+                or hotspot["width"] <= 0 or hotspot["height"] <= 0
+                or hotspot["x"] + hotspot["width"] > 100
+                or hotspot["y"] + hotspot["height"] > 100
+            ):
+                raise ValueError
+        except ValueError:
+            errors.append("Define una zona Hotspot válida en porcentajes (0 a 100).")
+            hotspot = {}
+        content["image_path"] = image_path
+        content["hotspot"] = hotspot
+        correct_answer = hotspot
+
+    if question_type == "visual_based":
+        existing_content = (
+            json.loads(existing_question.get("content_json") or "{}")
+            if existing_question is not None
+            else {}
+        )
+        image_path = existing_content.get("image_path")
+        uploaded = request.files.get("image")
+        if uploaded and uploaded.filename:
+            extension = os.path.splitext(uploaded.filename)[1].lower()
+            if extension not in {".png", ".jpg", ".jpeg", ".webp"}:
+                errors.append("La imagen del reactivo debe ser PNG, JPG o WebP.")
+            elif not supported_image_upload(uploaded, extension):
+                errors.append("El archivo no coincide con el formato de imagen indicado.")
+            else:
+                image_path = f"uploads/questions/{secrets.token_hex(16)}{extension}"
+                content["uploaded_image"] = uploaded
+        if not image_path and "uploaded_image" not in content:
+            errors.append("Sube una imagen para la pregunta Visual-Based.")
+        content["image_path"] = image_path
+
     try:
         validate_filters(
             db,
@@ -1138,11 +1401,13 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
     if errors:
         return errors
 
-    option_feedback = [
-        explanation if index == correct_option else "Consulta la retroalimentación de la pregunta."
-        for index in range(len(options))
-    ]
-    answer = options[correct_option]
+    uploaded = content.pop("uploaded_image", None)
+    if uploaded:
+        image_directory = os.path.join(current_app.static_folder, "uploads", "questions")
+        os.makedirs(image_directory, exist_ok=True)
+        uploaded.save(os.path.join(current_app.static_folder, content["image_path"]))
+    option_feedback = [explanation for _ in options]
+    answer = json.dumps(correct_answer, ensure_ascii=False)
     active = int(
         kind == "manual"
         and (bank_entry is None or bank_entry["status"] == "active")
@@ -1151,14 +1416,18 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
     if existing_question is None:
         question = db.execute(
             "INSERT INTO questions "
-            "(prompt, options_json, option_feedback_json, correct_option, explanation, "
+            "(prompt, options_json, option_feedback_json, correct_option, "
+            "question_type, content_json, correct_answer_json, explanation, "
             "source_type, active, created_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 prompt,
                 json.dumps(options, ensure_ascii=False),
                 json.dumps(option_feedback, ensure_ascii=False),
                 correct_option,
+                question_type,
+                json.dumps(content, ensure_ascii=False),
+                json.dumps(correct_answer, ensure_ascii=False),
                 explanation,
                 source_type,
                 active,
@@ -1211,13 +1480,17 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
     question_id = existing_question["id"]
     db.execute(
         "UPDATE questions SET prompt = %s, options_json = %s, "
-        "option_feedback_json = %s, correct_option = %s, explanation = %s, "
+        "option_feedback_json = %s, correct_option = %s, question_type = %s, "
+        "content_json = %s, correct_answer_json = %s, explanation = %s, "
         "active = %s WHERE id = %s",
         (
             prompt,
             json.dumps(options, ensure_ascii=False),
             json.dumps(option_feedback, ensure_ascii=False),
             correct_option,
+            question_type,
+            json.dumps(content, ensure_ascii=False),
+            json.dumps(correct_answer, ensure_ascii=False),
             explanation,
             active,
             question_id,
@@ -1274,6 +1547,169 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
             ),
         )
     return []
+
+
+def parse_option_indexes(raw_value, option_count, errors, *, allow_duplicates=False):
+    indexes = []
+    try:
+        indexes = [int(value.strip()) - 1 for value in raw_value.splitlines() if value.strip()]
+    except ValueError:
+        errors.append("Las respuestas correctas deben ser números, uno por línea.")
+        return []
+    if not indexes or any(index < 0 or index >= option_count for index in indexes):
+        errors.append("Los números de respuesta deben corresponder con las opciones.")
+        return []
+    if not allow_duplicates and len(indexes) != len(set(indexes)):
+        errors.append("No repitas números de respuesta correcta.")
+        return []
+    return indexes
+
+
+def supported_image_upload(uploaded, extension):
+    uploaded.stream.seek(0)
+    signature = uploaded.stream.read(12)
+    uploaded.stream.seek(0)
+    if extension == ".png":
+        return signature.startswith(b"\x89PNG\r\n\x1a\n")
+    if extension in {".jpg", ".jpeg"}:
+        return signature.startswith(b"\xff\xd8\xff")
+    return (
+        extension == ".webp"
+        and signature.startswith(b"RIFF")
+        and signature[8:12] == b"WEBP"
+    )
+
+
+def parse_exam_response(question):
+    question_type = question["question_type"]
+    options = json.loads(question["options_json"])
+    content = json.loads(question.get("content_json") or "{}")
+
+    def selected_indexes(field, count, option_count):
+        raw = request.form.getlist(field)
+        try:
+            indexes = [int(value) for value in raw]
+        except ValueError as error:
+            raise ValueError("Selecciona respuestas válidas.") from error
+        if len(indexes) != count or any(index < 0 or index >= option_count for index in indexes):
+            raise ValueError("Completa todas las partes de la respuesta.")
+        return indexes
+
+    if question_type in {"multiple_choice", "visual_based"}:
+        selected = request.form.get("selected_option", type=int)
+        if selected is None or not 0 <= selected < len(options):
+            raise ValueError("Selecciona una respuesta válida.")
+        return selected
+    if question_type == "multiple_responses":
+        selected = selected_indexes("selected_options", len(request.form.getlist("selected_options")), len(options))
+        correct_count = len(json.loads(question["correct_answer_json"]))
+        if len(selected) != correct_count or len(selected) != len(set(selected)):
+            raise ValueError(f"Selecciona exactamente {correct_count} opciones distintas.")
+        return selected
+    if question_type == "case_set":
+        children = content["questions"]
+        raw = request.form.getlist("case_answers")
+        if len(raw) != len(children):
+            raise ValueError("Selecciona una respuesta para cada pregunta del caso.")
+        try:
+            indexes = [int(value) for value in raw]
+        except ValueError as error:
+            raise ValueError("Selecciona respuestas válidas para el caso.") from error
+        if any(
+            index < 0 or index >= len(child["options"])
+            for index, child in zip(indexes, children)
+        ):
+            raise ValueError("Selecciona respuestas válidas para el caso.")
+        return indexes
+    if question_type == "drag_drop":
+        targets = content["targets"]
+        return selected_indexes("drag_match", len(options), len(targets))
+    if question_type == "pull_down":
+        blank_count = len(content["prompt_parts"]) - 1
+        return selected_indexes("blank_answers", blank_count, len(options))
+    if question_type == "hotspot":
+        try:
+            x, y = (float(value) for value in request.form.get("hotspot_point", "").split(",", 1))
+        except ValueError as error:
+            raise ValueError("Selecciona una zona de la imagen.") from error
+        if not 0 <= x <= 100 or not 0 <= y <= 100:
+            raise ValueError("La zona seleccionada no es válida.")
+        return {"x": x, "y": y}
+    raise ValueError("El tipo de pregunta no es válido.")
+
+
+def prepare_exam_question(question):
+    question["options"] = json.loads(question.pop("options_json"))
+    question["content"] = json.loads(question.pop("content_json") or "{}")
+    correct_answer = json.loads(question.pop("correct_answer_json") or "0")
+    question["selection_limit"] = (
+        len(correct_answer)
+        if question["question_type"] == "multiple_responses"
+        else None
+    )
+    question["response"] = (
+        json.loads(question["response_json"])
+        if question["response_json"] is not None
+        else question["selected_option"]
+    )
+    question["answered"] = question["response"] is not None
+
+
+def exam_response_is_correct(row):
+    response_raw = row.get("response_json")
+    response = (
+        json.loads(response_raw)
+        if response_raw is not None
+        else row.get("selected_option")
+    )
+    if response is None:
+        return False
+    correct_answer_raw = row.get("correct_answer_json")
+    correct = (
+        json.loads(correct_answer_raw)
+        if correct_answer_raw is not None
+        else row.get("correct_answer", row.get("correct_option"))
+    )
+    question_type = row["question_type"]
+    if question_type == "hotspot":
+        hotspot = correct
+        return (
+            hotspot["x"] <= response["x"] <= hotspot["x"] + hotspot["width"]
+            and hotspot["y"] <= response["y"] <= hotspot["y"] + hotspot["height"]
+        )
+    if question_type == "multiple_responses":
+        return sorted(response) == sorted(correct)
+    return response == correct
+
+
+def format_exam_answer(question_type, options, content, response, correct=False):
+    if response is None:
+        return ""
+    if question_type in {"multiple_choice", "visual_based"}:
+        return options[response]
+    if question_type == "multiple_responses":
+        return ", ".join(options[index] for index in response)
+    if question_type == "case_set":
+        return " | ".join(
+            f"{child['prompt']}: {child['options'][index]}"
+            for child, index in zip(content["questions"], response)
+        )
+    if question_type == "drag_drop":
+        return " | ".join(
+            f"{item} -> {content['targets'][target]}"
+            for item, target in zip(options, response)
+        )
+    if question_type == "pull_down":
+        return " / ".join(options[index] for index in response)
+    if question_type == "hotspot":
+        if correct:
+            hotspot = response
+            return (
+                f"Zona correcta: X {hotspot['x']}%, Y {hotspot['y']}%, "
+                f"ancho {hotspot['width']}%, alto {hotspot['height']}%."
+            )
+        return f"Punto seleccionado: X {response['x']}%, Y {response['y']}%."
+    return str(response)
 
 
 def init_db():

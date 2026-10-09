@@ -16,16 +16,26 @@
           <p class="eyebrow">Pregunta {{ question.position }} ·
             {% if question.result == "correct" %}Buena{% elif question.result == "incorrect" %}Mala{% else %}Guardada{% endif %}
           </p>
-          <h2>{{ question.prompt }}</h2>
+          <h2>{{ question.review_prompt }}</h2>
           {% if question.result == "pending" %}
             <p><strong>Sin respuesta registrada.</strong> Esta pregunta quedó guardada como pendiente.</p>
           {% else %}
-            <p><strong>Tu respuesta:</strong> {{ question.options[question.selected_option] }}</p>
-            <p><strong>Retroalimentación:</strong>
+            <p><strong>Tipo:</strong> {{ question_types[question.question_type][0] }}</p>
+            {% if question.question_type in ["visual_based", "hotspot"] %}
+              <img class="question-artifact-preview" src="{{ url_for('static', filename=question.content.image_path) }}" alt="Artefacto gráfico de la pregunta">
+            {% endif %}
+            <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
+            {% if question.question_type == "case_set" %}
+              <div class="case-questions">
+                {% for child in question.content.questions %}
+                  <p><strong>{{ loop.index }}. {{ child.prompt }}</strong></p>
+                {% endfor %}
+              </div>
+            {% endif %}
+            <p><strong>Resultado:</strong>
               {% if question.result == "correct" %}Tu respuesta es correcta. {% else %}Tu respuesta es incorrecta. {% endif %}
-              {{ question.option_feedback[question.selected_option] }}
             </p>
-            <p><strong>Respuesta correcta:</strong> {{ question.options[question.correct_option] }}</p>
+            <p><strong>Respuesta correcta:</strong> {{ question.correct_answer_display|rich_option }}</p>
             <p class="explanation"><strong>Explicación:</strong> {{ question.explanation }}</p>
           {% endif %}
         </article>

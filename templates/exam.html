@@ -1,44 +1,227 @@
 {% extends "base.html" %}
 {% block title %}Prueba en curso · Simulador PMP{% endblock %}
+{% block body_class %}exam-page{% endblock %}
 {% block head %}<script defer src="{{ url_for('static', filename='exam.js') }}"></script>{% endblock %}
 {% block content %}
+  {% set answered_count = questions|selectattr("answered")|list|length %}
   <div class="exam-topline">
-    <div><p class="eyebrow">Prueba de {{ exam.requested_count }} preguntas</p><h1>Pregunta {{ current_position }} de {{ exam.requested_count }}</h1></div>
-    <div class="timer" id="timer" data-seconds="{{ remaining_seconds }}" role="timer" aria-live="assertive">--:--:--</div>
+    <div class="exam-heading">
+      <p class="eyebrow">Simulador PMP · {{ exam.requested_count }} preguntas</p>
+      <h1>Pregunta {{ current_position }} <span class="muted">de {{ exam.requested_count }}</span></h1>
+      <div class="exam-progress" role="group" aria-label="Progreso de la prueba">
+        <div class="exam-progress-label">
+          <span>Progreso total</span>
+          <strong>{{ answered_count }} de {{ exam.requested_count }} respondidas</strong>
+        </div>
+        <div class="exam-progress-track" role="progressbar" aria-label="Preguntas respondidas"
+             aria-valuemin="0" aria-valuemax="{{ exam.requested_count }}" aria-valuenow="{{ answered_count }}">
+          <span style="width: {{ (answered_count * 100 / exam.requested_count)|round(0) }}%"></span>
+        </div>
+      </div>
+    </div>
+    <div class="exam-clock">
+      <span class="muted">Tiempo restante</span>
+      <div class="timer" id="timer" data-seconds="{{ remaining_seconds }}" role="timer" aria-live="assertive">--:--:--</div>
+    </div>
   </div>
   <div class="exam-layout">
     <section class="panel question-panel">
-      <p class="question-prompt">{{ current.prompt }}</p>
+      <div class="question-type-heading">
+        <p class="eyebrow">Formato del reactivo</p>
+        <span class="question-type-badge">{{ question_types[current.question_type][0] }}</span>
+      </div>
       <form method="post" action="{{ url_for('save_exam_answer', exam_id=exam.id) }}" id="answer-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="question_id" value="{{ current.id }}">
         <input type="hidden" name="next_position" value="{{ current_position + 1 if current_position < exam.requested_count else current_position }}">
-        <fieldset class="answer-options">
-          <legend class="visually-hidden">Selecciona una respuesta</legend>
-          {% for option in current.options %}
-            <label class="answer-option">
-              <input type="radio" name="selected_option" value="{{ loop.index0 }}" {% if current.selected_option == loop.index0 %}checked{% endif %}>
-              <span>{{ option }}</span>
-            </label>
-          {% endfor %}
-        </fieldset>
+
+        {% if current.question_type == "case_set" %}
+          <div class="case-split-layout" data-case-set data-active-question="{{ current.active_subquestion }}">
+            <aside class="case-scenario" tabindex="0" aria-label="Caso de estudio; desplazamiento independiente">
+              <h2>Caso de estudio</h2>
+              <div class="case-scenario-text">{{ current.prompt }}</div>
+            </aside>
+            <section class="case-active-question">
+              <p class="muted" id="case-question-progress" aria-live="polite"></p>
+              {% for child in current.content.questions %}
+                {% set child_loop = loop %}
+                <fieldset class="case-subquestion answer-options" data-case-question="{{ loop.index0 }}" {% if loop.index0 != current.active_subquestion %}hidden{% endif %}>
+                  <legend>{{ child.prompt }}</legend>
+                  {% for option in child.options %}
+                    <label class="answer-option">
+                      <input type="radio" name="case_choice_{{ child_loop.index0 }}" value="{{ loop.index0 }}" data-case-choice="{{ child_loop.index0 }}" {% if current.response and current.response[child_loop.index0] == loop.index0 %}checked{% endif %}>
+                      <span>{{ option|rich_option }}</span>
+                    </label>
+                  {% endfor %}
+                </fieldset>
+              {% endfor %}
+              <div class="case-step-controls">
+                <button class="button secondary" type="button" data-case-previous>Anterior</button>
+                <button class="button secondary" type="button" data-case-next>Siguiente</button>
+                <span id="case-question-status" class="muted" role="status"></span>
+              </div>
+              {% for child in current.content.questions %}
+                <input type="hidden" name="case_answers" data-case-answer="{{ loop.index0 }}" value="{{ current.response[loop.index0] if current.response else '' }}">
+              {% endfor %}
+              <p class="message error" data-case-error hidden>Responde todas las preguntas del caso para continuar.</p>
+            </section>
+          </div>
+        {% else %}
+          <p class="question-prompt">{{ current.prompt }}</p>
+          {% if current.question_type in ["visual_based", "hotspot"] %}
+            <div class="exam-artifact-container">
+              <img class="question-artifact-preview exam-artifact {% if current.question_type == 'hotspot' %}hotspot-image{% endif %}"
+                   src="{{ url_for('static', filename=current.content.image_path) }}"
+                   alt="Artefacto gráfico de la pregunta"
+                   {% if current.question_type == "hotspot" %}data-hotspot-image{% endif %}>
+              {% if current.question_type == "hotspot" %}
+                <svg class="hotspot-click-area" viewBox="0 0 100 100" preserveAspectRatio="none" role="application" tabindex="0" aria-label="Área interactiva: haz clic o usa las flechas para posicionar el punto y Enter para seleccionarlo" data-hotspot-canvas>
+                  <circle class="hotspot-svg-marker" data-hotspot-marker r="12" hidden></circle>
+                </svg>
+              {% endif %}
+              {% if current.question_type == "visual_based" %}
+                <button class="button secondary image-zoom-open" type="button" data-image-zoom-open>Ampliar imagen</button>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {% if current.question_type in ["multiple_choice", "visual_based"] %}
+            <fieldset class="answer-options">
+              <legend class="visually-hidden">Selecciona una respuesta</legend>
+              {% for option in current.options %}
+                <label class="answer-option">
+                  <input type="radio" name="selected_option" value="{{ loop.index0 }}" {% if current.response == loop.index0 %}checked{% endif %}>
+                  <span><strong>{{ ["A", "B", "C", "D"][loop.index0] }}.</strong> {{ option|rich_option }}</span>
+                </label>
+              {% endfor %}
+            </fieldset>
+          {% elif current.question_type == "multiple_responses" %}
+            <fieldset class="answer-options" data-multiple-responses data-selection-limit="{{ current.selection_limit }}">
+              <legend data-selection-prompt>Seleccione {{ current.selection_limit }} opciones</legend>
+              <p class="muted" data-selection-status aria-live="polite">Seleccionadas: {{ current.response|length if current.response else 0 }} de {{ current.selection_limit }}</p>
+              {% for option in current.options %}
+                <label class="answer-option">
+                  <input type="checkbox" name="selected_options" value="{{ loop.index0 }}" {% if current.response and loop.index0 in current.response %}checked{% endif %}>
+                  <span>{{ option|rich_option }}</span>
+                </label>
+              {% endfor %}
+            </fieldset>
+          {% elif current.question_type == "drag_drop" %}
+            <div class="drag-drop-grid" data-drag-drop>
+              <div class="drag-column">
+                <h2>Fichas</h2>
+                <p class="form-hint">Toca una ficha y después su casilla receptora, o arrástrala.</p>
+                {% for item in current.options %}
+                  <button class="drag-source" type="button" draggable="true" data-item-index="{{ loop.index0 }}" aria-pressed="false">{{ item|rich_option }}</button>
+                {% endfor %}
+              </div>
+              <div class="drag-column">
+                <h2>Casillas receptoras</h2>
+                {% for target in current.content.targets %}
+                  <div class="drag-target-row">
+                    <button class="drag-drop-zone" type="button" data-target-index="{{ loop.index0 }}" aria-label="Asignar ficha a {{ target }}">{{ target }}</button>
+                    <span class="drag-assignment" data-target-assignment="{{ loop.index0 }}">Suelta o selecciona una ficha</span>
+                  </div>
+                {% endfor %}
+                <details class="drag-select-fallback">
+                  <summary>Asignar mediante selectores accesibles</summary>
+                  {% for item in current.options %}
+                    {% set item_loop = loop %}
+                    <label class="drag-match-row">
+                      <span>{{ item }}</span>
+                      <select name="drag_match" aria-label="Destino para {{ item }}">
+                        <option value="">Selecciona un destino</option>
+                        {% for target in current.content.targets %}
+                          <option value="{{ loop.index0 }}" {% if current.response and current.response[item_loop.index0] == loop.index0 %}selected{% endif %}>{{ target }}</option>
+                        {% endfor %}
+                      </select>
+                    </label>
+                  {% endfor %}
+                </details>
+                <span class="visually-hidden" data-drag-status aria-live="polite"></span>
+              </div>
+            </div>
+          {% elif current.question_type == "hotspot" %}
+            <p class="form-hint">Haz clic o toca en la imagen para seleccionar el punto.</p>
+            <input type="hidden" name="hotspot_point" value="{% if current.response is mapping %}{{ current.response.x }},{{ current.response.y }}{% endif %}">
+            <p class="muted" data-hotspot-status aria-live="polite">{% if current.response is mapping %}Punto seleccionado: X {{ current.response.x }}%, Y {{ current.response.y }}%.{% endif %}</p>
+          {% elif current.question_type == "pull_down" %}
+            <div class="pull-down-prompt">
+              {% for part in current.content.prompt_parts %}
+                {% set part_loop = loop %}
+                <span>{{ part }}</span>{% if not loop.last %}
+                  <label class="inline-blank"><span class="visually-hidden">Respuesta para espacio {{ loop.index }}</span>
+                    <select name="blank_answers">
+                      <option value="">Selecciona</option>
+                      {% for option in current.options %}
+                        <option value="{{ loop.index0 }}" {% if current.response and current.response[part_loop.index0] == loop.index0 %}selected{% endif %}>{{ option|rich_option }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endif %}
+
         {% if current.marked_saved %}<p class="message">Esta pregunta está guardada como pendiente. Al responderla dejará de estar pendiente.</p>{% endif %}
         <div class="actions">
           <button class="button" type="submit" name="action" value="answer">Guardar respuesta y continuar</button>
           <button class="button secondary" type="submit" name="action" value="save">Marcar como guardada</button>
         </div>
       </form>
+      {% if current.question_type == "visual_based" %}
+        <dialog class="image-zoom-dialog" data-image-zoom aria-label="Ampliar artefacto gráfico">
+          <div class="image-zoom-toolbar">
+            <button class="button secondary" type="button" data-zoom-out aria-label="Reducir zoom">−</button>
+            <label>Zoom <input type="range" min="1" max="4" step=".25" value="1" data-zoom-level></label>
+            <button class="button secondary" type="button" data-zoom-in aria-label="Aumentar zoom">+</button>
+            <button class="button secondary" type="button" data-image-zoom-close>Cerrar</button>
+          </div>
+          <div class="image-zoom-viewport" data-zoom-viewport tabindex="0">
+            <img alt="Artefacto gráfico ampliado" data-zoom-image>
+          </div>
+        </dialog>
+      {% endif %}
     </section>
     <aside class="panel question-navigation">
-      <h2>Preguntas</h2>
+      <div class="section-heading">
+        <div><h2>Preguntas</h2><p class="muted">Navega por el examen</p></div>
+      </div>
+      <div class="question-navigation-filters">
+        <label>Formato
+          <select data-question-type-filter>
+            <option value="">Todos</option>
+            {% for key, details in question_types.items() %}
+              <option value="{{ key }}">{{ details[0] }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Estado
+          <select data-question-status-filter>
+            <option value="">Todos</option>
+            <option value="unanswered">Pendientes</option>
+            <option value="answered">Respondidas</option>
+            <option value="saved">Guardadas</option>
+          </select>
+        </label>
+      </div>
       <div class="question-number-grid">
         {% for question in questions %}
-          <a class="question-number {% if question.position == current_position %}current{% endif %} {% if question.marked_saved %}saved{% elif question.selected_option is not none %}answered{% endif %}"
+          {% set question_status = "saved" if question.marked_saved else "answered" if question.answered else "unanswered" %}
+          <a class="question-number {% if question.position == current_position %}current{% endif %} {% if question_status == 'saved' %}saved{% elif question_status == 'answered' %}answered{% endif %}"
+             data-question-number data-question-type="{{ question.question_type }}" data-question-status="{{ question_status }}"
              href="{{ url_for('take_exam', exam_id=exam.id, question=question.position) }}"
-             aria-label="Pregunta {{ question.position }}{% if question.marked_saved %}, guardada{% elif question.selected_option is not none %}, respondida{% endif %}">
+             aria-label="Pregunta {{ question.position }}, {{ question_types[question.question_type][0] }}{% if question_status == 'saved' %}, guardada{% elif question_status == 'answered' %}, respondida{% else %}, pendiente{% endif %}">
             {{ question.position }}
           </a>
         {% endfor %}
+      </div>
+      <p class="muted question-filter-results" data-question-filter-results aria-live="polite"></p>
+      <div class="question-status-legend" aria-label="Estados de pregunta">
+        <span><i class="unanswered"></i>Pendiente</span>
+        <span><i class="answered"></i>Respondida</span>
+        <span><i class="saved"></i>Guardada</span>
       </div>
       <form method="post" action="{{ url_for('save_exam_answer', exam_id=exam.id) }}" class="finish-form" onsubmit="return confirm('¿Finalizar la prueba ahora? Las preguntas sin responder quedarán pendientes.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

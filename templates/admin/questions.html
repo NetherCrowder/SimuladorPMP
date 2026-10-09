@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block head %}<script defer src="{{ url_for('static', filename='admin-banks.js') }}"></script>{% endblock %}
 {% block title %}Bancos de preguntas · Administración PMP{% endblock %}
 {% block content %}
   <div class="page-heading">
@@ -11,15 +12,44 @@
     <a class="button secondary" href="{{ url_for('new_admin_question', kind='automated') }}">Agregar pregunta automática</a>
   </nav>
 
-  <section class="panel">
-    <h2>Banco manual</h2>
+  <section class="panel bank-tools" aria-label="Buscar y filtrar preguntas">
+    <label>Buscar en el banco
+      <input type="search" data-bank-search placeholder="Busca por enunciado..." autocomplete="off">
+    </label>
+    <label>Tipo de pregunta
+      <select data-bank-type>
+        <option value="">Todos los tipos</option>
+        {% for key, details in question_types.items() %}
+          <option value="{{ key }}">{{ details[0] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Estado
+      <select data-bank-status>
+        <option value="">Todos los estados</option>
+        <option value="active">Activa</option>
+        <option value="inactive">Inactiva</option>
+        <option value="pending">Pendiente</option>
+        <option value="approved">Aprobada</option>
+        <option value="rejected">Rechazada</option>
+      </select>
+    </label>
+    <p class="muted" data-bank-results aria-live="polite"></p>
+  </section>
+
+  <section class="panel" data-bank-section="manual">
+    <div class="section-heading">
+      <div><h2>Banco manual</h2><p class="muted">{{ manual|length }} preguntas</p></div>
+    </div>
     {% if manual %}
       <div class="table-wrap"><table>
-        <thead><tr><th>Pregunta</th><th>Fecha de adición</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Pregunta</th><th>Tipo</th><th>Fecha de adición</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody>
           {% for entry in manual %}
-            <tr>
+            {% set question_type = entry.question_type or "multiple_choice" %}
+            <tr data-bank-row data-bank-kind="manual" data-type="{{ question_type }}" data-status="{{ entry.status }}" data-question="{{ entry.question }}">
               <td>{{ entry.question }}</td>
+              <td>{{ question_types[question_type][0] }}</td>
               <td>{{ entry.added_at|datetime }}</td>
               <td>{{ "Activa" if entry.status == "active" else "Inactiva" }}</td>
               <td class="actions">
@@ -37,6 +67,7 @@
               </td>
             </tr>
           {% endfor %}
+          <tr data-bank-no-results hidden><td colspan="5">No hay preguntas que coincidan con estos filtros.</td></tr>
         </tbody>
       </table></div>
     {% else %}
@@ -44,15 +75,19 @@
     {% endif %}
   </section>
 
-  <section class="panel">
-    <h2>Banco automático</h2>
+  <section class="panel" data-bank-section="automated">
+    <div class="section-heading">
+      <div><h2>Banco automático</h2><p class="muted">{{ automated|length }} preguntas</p></div>
+    </div>
     {% if automated %}
       <div class="table-wrap"><table>
-        <thead><tr><th>Pregunta</th><th>Fecha</th><th>Validación</th><th>Disponible</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Pregunta</th><th>Tipo</th><th>Fecha</th><th>Validación</th><th>Disponible</th><th>Acciones</th></tr></thead>
         <tbody>
           {% for entry in automated %}
-            <tr>
+            {% set question_type = entry.question_type or "multiple_choice" %}
+            <tr data-bank-row data-bank-kind="automated" data-type="{{ question_type }}" data-status="{{ 'active' if entry.active else 'inactive' }}" data-validation="{{ entry.validation_status }}" data-question="{{ entry.question }}">
               <td>{{ entry.question }}</td>
+              <td>{{ question_types[question_type][0] }}</td>
               <td>{{ entry.added_at|datetime }}</td>
               <td>{{ {"pending": "Pendiente", "approved": "Aprobada", "rejected": "Rechazada"}[entry.validation_status] }}</td>
               <td>{{ "Sí" if entry.active else "No" }}</td>
@@ -75,6 +110,7 @@
               </td>
             </tr>
           {% endfor %}
+          <tr data-bank-no-results hidden><td colspan="6">No hay preguntas que coincidan con estos filtros.</td></tr>
         </tbody>
       </table></div>
     {% else %}

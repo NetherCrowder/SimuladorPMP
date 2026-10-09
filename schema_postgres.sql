@@ -47,12 +47,25 @@ CREATE TABLE IF NOT EXISTS questions (
     options_json TEXT NOT NULL,
     option_feedback_json TEXT NOT NULL DEFAULT '[]',
     correct_option INTEGER NOT NULL CHECK (correct_option >= 0),
+    question_type TEXT NOT NULL DEFAULT 'multiple_choice'
+        CHECK (question_type IN (
+            'case_set', 'visual_based', 'multiple_choice', 'multiple_responses',
+            'drag_drop', 'hotspot', 'pull_down'
+        )),
+    content_json TEXT NOT NULL DEFAULT '{}',
+    correct_answer_json TEXT NOT NULL DEFAULT '0',
     explanation TEXT NOT NULL,
     source_type TEXT NOT NULL DEFAULT 'general'
         CHECK (source_type IN ('general', 'automated')),
     active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
     created_at DOUBLE PRECISION NOT NULL
 );
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS question_type TEXT NOT NULL DEFAULT 'multiple_choice';
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS content_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS correct_answer_json TEXT NOT NULL DEFAULT '0';
+UPDATE questions
+SET correct_answer_json = correct_option::TEXT
+WHERE question_type = 'multiple_choice' AND correct_answer_json = '0' AND correct_option <> 0;
 
 CREATE TABLE IF NOT EXISTS question_performance_domains (
     question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
@@ -159,11 +172,13 @@ CREATE TABLE IF NOT EXISTS exam_answers (
     exam_id INTEGER NOT NULL,
     question_id INTEGER NOT NULL,
     selected_option INTEGER NOT NULL CHECK (selected_option >= 0),
+    response_json TEXT,
     answered_at DOUBLE PRECISION NOT NULL,
     PRIMARY KEY (exam_id, question_id),
     FOREIGN KEY (exam_id, question_id)
         REFERENCES exam_questions(exam_id, question_id) ON DELETE CASCADE
 );
+ALTER TABLE exam_answers ADD COLUMN IF NOT EXISTS response_json TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_exams_user_started
     ON exams(user_id, started_at DESC);
