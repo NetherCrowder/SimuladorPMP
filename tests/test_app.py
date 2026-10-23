@@ -17,12 +17,18 @@ from app import (
     exam_response_is_correct,
     get_db,
     init_db,
+    matching_questions,
     normalize_phone_number,
     parse_option_indexes,
     parse_exam_response,
     prepare_exam_question,
     question_form_values,
+    question_interaction_config,
     render_rich_option,
+    validate_filters,
+    count_matching_questions,
+    OFFICIAL_EXAM_DISTRIBUTIONS,
+    practice_consistency,
 )
 from conexion import connect_database, database_config_from_env
 from werkzeug.security import check_password_hash
@@ -161,6 +167,211 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
 
 
 class QuestionTypeResponseTestCase(unittest.TestCase):
+    def test_question_json_formats_match_their_interaction_contracts(self):
+        cases = question_interaction_config(
+            "case_set",
+            "Texto del caso",
+            [],
+            [3],
+            {
+                "questions": [
+                    {
+                        "prompt": "Pregunta",
+                        "options": ["A", "B", "C", "D"],
+                        "correct_option": 3,
+                    }
+                ]
+            },
+        )
+        self.assertEqual(cases["case_text"], "Texto del caso")
+        self.assertEqual(cases["sub_questions"][0]["correct_answer"], "D")
+        self.assertEqual(cases["sub_questions"][0]["options"]["A"], "A")
+
+        media = question_interaction_config(
+            "hotspot",
+            "Señala el punto",
+            [],
+            {"x": 10, "y": 15, "width": 20, "height": 25},
+            {
+                "image_path": "uploads/questions/map.png",
+                "alt_text": "Mapa",
+                "hotspot": {"x": 10, "y": 15, "width": 20, "height": 25},
+                "hotspot_pixels": {
+                    "x_min": 120,
+                    "y_min": 45,
+                    "x_max": 200,
+                    "y_max": 150,
+                },
+            },
+        )
+        self.assertEqual(media["interaction_mode"], "hotspot")
+        self.assertEqual(media["target_area"]["x_min"], 120)
+        self.assertEqual(media["target_area"]["x_max"], 200)
+        self.assertEqual(media["alt_text"], "Mapa")
+
+        multiple = question_interaction_config(
+            "multiple_responses", "Elige", ["Uno", "Dos"], [0, 1], {}
+        )
+        self.assertEqual(multiple["max_Selections"], 2)
+        self.assertEqual(multiple["correct_answers"], ["A", "B"])
+        single = question_interaction_config(
+            "multiple_choice", "Elige una", ["Uno", "Dos"], 1, {}
+        )
+        self.assertEqual(single["max_Selections"], 1)
+        self.assertEqual(single["correct_answers"], ["B"])
+
+        visual = question_interaction_config(
+            "visual_based",
+            "Interpreta la imagen",
+            ["Uno", "Dos"],
+            0,
+            {"image_path": "uploads/questions/chart.png", "alt_text": "Gráfico"},
+        )
+        self.assertEqual(visual["interaction_mode"], "multiple_choice")
+        self.assertEqual(visual["media_url"], "/static/uploads/questions/chart.png")
+        self.assertEqual(visual["options"]["A"], "Uno")
+
+        drag = question_interaction_config(
+            "drag_drop",
+            "Relaciona",
+            ["Rápido", "Paralelo"],
+            [1, 0],
+            {"targets": ["Costo", "Riesgo"]},
+        )
+        self.assertEqual(
+            [target["accepts"] for target in drag["target_boxes"]],
+            ["s2", "s1"],
+        )
+
+        pull_down = question_interaction_config(
+            "pull_down",
+            "Enfoque [[blank]] y luego [[blank]]",
+            ["Ágil", "Predictivo"],
+            [0, 1],
+            {},
+        )
+        self.assertEqual(
+            pull_down["template_text"],
+            "Enfoque [BLANK_1] y luego [BLANK_2]",
+        )
+        self.assertEqual(pull_down["dropdowns"]["BLANK_2"]["correct"], "Predictivo")
+
+    def test_filter_validation_accepts_one_axis_and_rejects_mixed_axis_data(self):
+        self.assertEqual(
+            validate_filters(
+                None, {"axis": "performance", "values": ["governance", "scope"]}
+            ),
+            {"axis": "performance", "values": ["governance", "scope"]},
+        )
+        self.assertEqual(
+            validate_filters(None, {"axis": "eco", "values": ["people"]}),
+            {"axis": "eco", "values": ["people"]},
+        )
+        self.assertEqual(
+            validate_filters(
+                None, {"axis": "methodology", "values": ["agile_hybrid"]}
+            ),
+            {"axis": "methodology", "values": ["agile_hybrid"]},
+        )
+        with self.assertRaisesRegex(ValueError, "eje de filtrado"):
+            validate_filters(None, {"axis": "all", "values": ["people"]})
+        with self.assertRaisesRegex(ValueError, "categoría no válida"):
+            validate_filters(None, {"axis": "eco", "values": ["agile"]})
+        with self.assertRaisesRegex(ValueError, "seleccionar una sola"):
+            validate_filters(None, {"axis": "eco", "values": ["people", "processes"]})
+        with self.assertRaisesRegex(ValueError, "seleccionar una sola"):
+            validate_filters(
+                None,
+                {"axis": "methodology", "values": ["predictive", "agile_hybrid"]},
+            )
+
+    def test_question_queries_filter_only_the_selected_axis(self):
+        db = Mock()
+        filters = {"axis": "methodology", "values": ["agile_hybrid"]}
+        matching_questions(db, filters, 30)
+        query, parameters = db.execute.call_args.args
+        self.assertIn("FROM question_methodologies category", query)
+        self.assertIn("EXISTS (SELECT 1 FROM question_eco_domains", query)
+        self.assertIn("EXISTS (SELECT 1 FROM question_performance_domains", query)
+        self.assertEqual(parameters, ("agile_hybrid", 30))
+
+        db.reset_mock()
+        db.execute.return_value.fetchone.return_value = {"count": 7}
+        self.assertEqual(count_matching_questions(db, filters), 7)
+        query, parameters = db.execute.call_args.args
+        self.assertIn("FROM question_methodologies category", query)
+        self.assertEqual(parameters, ["agile_hybrid"])
+
+    def test_official_exam_quotas_match_required_marginal_percentages(self):
+        for exam_count, distribution in OFFICIAL_EXAM_DISTRIBUTIONS.items():
+            self.assertEqual(sum(distribution.values()), exam_count)
+            eco_counts = {
+                eco: sum(
+                    amount
+                    for (selected_eco, _), amount in distribution.items()
+                    if selected_eco == eco
+                )
+                for eco in ("people", "processes", "business_environment")
+            }
+            approach_counts = {
+                approach: sum(
+                    amount
+                    for (_, selected_approach), amount in distribution.items()
+                    if selected_approach == approach
+                )
+                for approach in ("agile_hybrid", "predictive")
+            }
+            self.assertEqual(eco_counts, (
+                {"people": 20, "processes": 25, "business_environment": 15}
+                if exam_count == 60
+                else {"people": 59, "processes": 74, "business_environment": 47}
+            ))
+            self.assertEqual(
+                approach_counts,
+                {"agile_hybrid": exam_count * 3 // 5, "predictive": exam_count * 2 // 5},
+            )
+
+    def test_consistency_averages_only_the_three_latest_attempts_per_theme(self):
+        rows = []
+        for exam_id, ended_at, responses in (
+            (4, 4, (0, 0)),
+            (3, 3, (0, 1)),
+            (2, 2, (1, 1)),
+            (1, 1, (0, 0)),
+        ):
+            for response in responses:
+                rows.append(
+                    {
+                        "exam_id": exam_id,
+                        "filters_json": json.dumps(
+                            {
+                                "mode": "practice",
+                                "axis": "performance",
+                                "values": ["governance"],
+                            }
+                        ),
+                        "ended_at": ended_at,
+                        "question_type": "multiple_choice",
+                        "correct_answer_json": "0",
+                        "correct_option": 0,
+                        "response_json": json.dumps(response),
+                        "selected_option": response,
+                        "category_id": "governance",
+                    }
+                )
+        db = Mock()
+        db.execute.side_effect = [
+            Mock(fetchall=Mock(return_value=rows)),
+            Mock(fetchall=Mock(return_value=[])),
+            Mock(fetchall=Mock(return_value=[])),
+        ]
+
+        consistency = practice_consistency(db, "user-id")
+
+        self.assertEqual(consistency[0]["label"], "Gobernanza (Governance)")
+        self.assertEqual(consistency[0]["attempt_count"], 3)
+        self.assertEqual(consistency[0]["consistency"], 50.0)
+
     def test_rich_option_formatting_escapes_html(self):
         rendered = str(render_rich_option("**bold** and *italic* <script>alert(1)</script>"))
         self.assertIn("<strong>bold</strong>", rendered)
@@ -459,12 +670,14 @@ class SimulatorTestCase(unittest.TestCase):
         return user_id
 
     def add_questions(self, count):
+        question_cells = [
+            cell
+            for cell, quota in OFFICIAL_EXAM_DISTRIBUTIONS[180].items()
+            for _ in range(quota)
+        ]
         with self.connect() as db:
-            combination = db.execute(
-                "SELECT methodology_id, eco_domain_id FROM valid_combinations LIMIT 1"
-            ).fetchone()
-            self.assertIsNotNone(combination)
             for index in range(count):
+                eco_domain, methodology = question_cells[index % len(question_cells)]
                 cursor = db.execute(
                     "INSERT INTO questions "
                     "(prompt, options_json, option_feedback_json, correct_option, "
@@ -490,24 +703,16 @@ class SimulatorTestCase(unittest.TestCase):
                     (question_id,),
                 )
                 db.execute(
-                    "INSERT INTO question_methodologies VALUES (%s, %s)",
-                    (question_id, combination["methodology_id"]),
+                    "INSERT INTO question_eco_domains VALUES (%s, %s)",
+                    (question_id, eco_domain),
                 )
                 db.execute(
-                    "INSERT INTO question_eco_domains VALUES (%s, %s)",
-                    (question_id, combination["eco_domain_id"]),
+                    "INSERT INTO question_methodologies VALUES (%s, %s)",
+                    (question_id, methodology),
                 )
 
     def selected_filters(self):
-        with self.connect() as db:
-            combination = db.execute(
-                "SELECT methodology_id, eco_domain_id FROM valid_combinations LIMIT 1"
-            ).fetchone()
-        return {
-            "performance": ["governance"],
-            "methodology": [combination["methodology_id"]],
-            "eco": [combination["eco_domain_id"]],
-        }
+        return {"axis": "performance", "category": ["governance"]}
 
     def test_registration_login_and_password_hashing(self):
         response = self.register()
@@ -665,7 +870,7 @@ class SimulatorTestCase(unittest.TestCase):
             question_count = db.execute(
                 "SELECT COUNT(*) AS count FROM questions"
             ).fetchone()["count"]
-        self.assertEqual(len(pairs), 9)
+        self.assertEqual(len(pairs), 6)
         self.assertEqual(question_count, 0)
 
     def test_admin_and_owner_panels_are_role_protected(self):
@@ -728,9 +933,9 @@ class SimulatorTestCase(unittest.TestCase):
             "options": "Primera opción\nSegunda opción\nTercera opción\nCuarta opción",
             "correct_option": "2",
             "explanation": "La segunda opción es correcta.",
-            "official_domains": ["processes"],
-            "methodological_approaches": ["predictive"],
-            "performance_domains": ["governance"],
+            "performance_domain": "governance",
+            "eco_domain": "processes",
+            "methodology": "agile_hybrid",
         }
 
         response = self.client.post(
@@ -740,8 +945,9 @@ class SimulatorTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.connect() as db:
             manual = db.execute(
-                "SELECT question_id, status FROM manual_question_bank "
-                "WHERE question = %s",
+                "SELECT question_id, status, category_type, category_value, "
+                "interaction_config, feedback FROM manual_question_bank "
+                "WHERE stem = %s",
                 ("Pregunta administrativa",),
             ).fetchone()
             manual_question = db.execute(
@@ -749,11 +955,41 @@ class SimulatorTestCase(unittest.TestCase):
                 "FROM questions WHERE id = %s",
                 (manual["question_id"],),
             ).fetchone()
-        self.assertEqual(manual["status"], "active")
+            tags = {
+                "performance": db.execute(
+                    "SELECT domain_id FROM question_performance_domains "
+                    "WHERE question_id = %s",
+                    (manual["question_id"],),
+                ).fetchone()["domain_id"],
+                "eco": db.execute(
+                    "SELECT eco_domain_id FROM question_eco_domains "
+                    "WHERE question_id = %s",
+                    (manual["question_id"],),
+                ).fetchone()["eco_domain_id"],
+                "methodology": db.execute(
+                    "SELECT methodology_id FROM question_methodologies "
+                    "WHERE question_id = %s",
+                    (manual["question_id"],),
+                ).fetchone()["methodology_id"],
+            }
+        self.assertTrue(manual["status"])
+        self.assertEqual(manual["feedback"], "La segunda opción es correcta.")
+        self.assertEqual(manual["category_type"], "performance_domain")
+        self.assertEqual(manual["category_value"], "governance")
+        self.assertEqual(manual["interaction_config"]["max_Selections"], 1)
+        self.assertEqual(manual["interaction_config"]["correct_answers"], ["B"])
         self.assertEqual(manual_question["source_type"], "general")
         self.assertEqual(manual_question["correct_option"], 1)
         self.assertEqual(manual_question["question_type"], "multiple_choice")
         self.assertEqual(manual_question["active"], 1)
+        self.assertEqual(
+            tags,
+            {
+                "performance": "governance",
+                "eco": "processes",
+                "methodology": "agile_hybrid",
+            },
+        )
 
         response = self.client.post(
             "/admin/questions/new?kind=manual",
@@ -769,7 +1005,7 @@ class SimulatorTestCase(unittest.TestCase):
             multiple = db.execute(
                 "SELECT q.question_type, q.correct_answer_json "
                 "FROM questions q JOIN manual_question_bank b ON b.question_id = q.id "
-                "WHERE b.question = %s",
+                "WHERE b.stem = %s",
                 ("Selecciona ambas respuestas.",),
             ).fetchone()
         self.assertEqual(multiple["question_type"], "multiple_responses")
@@ -794,7 +1030,7 @@ class SimulatorTestCase(unittest.TestCase):
             case = db.execute(
                 "SELECT q.content_json, q.correct_answer_json "
                 "FROM questions q JOIN manual_question_bank b ON b.question_id = q.id "
-                "WHERE b.question = %s",
+                "WHERE b.stem = %s",
                 (case_data["prompt"],),
             ).fetchone()
         self.assertEqual(len(json.loads(case["content_json"])["questions"]), 3)
@@ -830,37 +1066,40 @@ class SimulatorTestCase(unittest.TestCase):
         self.assertEqual(approved["validation_status"], "approved")
         self.assertEqual(approved["active"], 1)
 
-    def test_question_tags_must_use_a_registered_pair(self):
+    def test_question_has_one_tag_per_axis_and_can_cross_the_three_axes(self):
         with self.connect() as db:
-            pair = db.execute(
-                "SELECT methodology_id, eco_domain_id FROM valid_combinations LIMIT 1"
-            ).fetchone()
-            db.execute(
-                "DELETE FROM valid_combinations WHERE methodology_id = %s "
-                "AND eco_domain_id = %s",
-                (pair["methodology_id"], pair["eco_domain_id"]),
-            )
             question_id = db.execute(
                 "INSERT INTO questions "
                 "(prompt, options_json, correct_option, explanation, created_at) "
                 "VALUES ('test', '[\"A\",\"B\"]', 0, 'test', 1) RETURNING id"
             ).fetchone()["id"]
             db.execute(
-                "INSERT INTO question_methodologies VALUES (%s, %s)",
-                (question_id, pair["methodology_id"]),
+                "INSERT INTO question_performance_domains VALUES (%s, 'governance')",
+                (question_id,),
+            )
+            db.execute(
+                "INSERT INTO question_methodologies VALUES (%s, 'agile_hybrid')",
+                (question_id,),
+            )
+            db.execute(
+                "INSERT INTO question_eco_domains VALUES (%s, 'people')",
+                (question_id,),
             )
             with self.assertRaises(psycopg2.errors.RaiseException):
                 db.execute(
-                    "INSERT INTO question_eco_domains VALUES (%s, %s)",
-                    (question_id, pair["eco_domain_id"]),
+                    "INSERT INTO question_performance_domains VALUES (%s, 'scope')",
+                    (question_id,),
                 )
+            db.rollback()
 
     def test_exact_exam_size_is_required(self):
         self.register()
         filters = self.selected_filters()
         baseline = self.client.get(
             "/practice/availability",
-            query_string=urlencode(filters, doseq=True),
+            query_string=urlencode(
+                {**filters, "mode": "practice", "length": "30"}, doseq=True
+            ),
         ).get_json()["available"]
         self.add_questions(4)
         response = self.client.post(
@@ -883,10 +1122,15 @@ class SimulatorTestCase(unittest.TestCase):
         self.register()
         self.add_questions(180)
         filters = self.selected_filters()
-        for length in (30, 60, 75, 180):
+        for length in (15, 30, 60, 180):
+            mode = "practice" if length in (15, 30) else "official"
             response = self.client.post(
                 "/practice/start",
-                data={**filters, "length": str(length)},
+                data={
+                    **(filters if mode == "practice" else {}),
+                    "mode": mode,
+                    "length": str(length),
+                },
             )
             self.assertEqual(response.status_code, 302)
             exam_id = int(urlsplit(response.headers["Location"]).path.rsplit("/", 1)[1])
@@ -907,7 +1151,26 @@ class SimulatorTestCase(unittest.TestCase):
                 ).fetchone()["question_id"]
             self.assertEqual(exam["requested_count"], length)
             self.assertEqual(question_count, length)
-            self.assertEqual(exam["expires_at"] - exam["started_at"], length * 76)
+            self.assertEqual(exam["expires_at"] - exam["started_at"], length * 80)
+            if mode == "official":
+                with self.connect() as db:
+                    distributions = db.execute(
+                        "SELECT eco.eco_domain_id, methodology.methodology_id, "
+                        "COUNT(*) AS count FROM exam_questions eq "
+                        "JOIN question_eco_domains eco ON eco.question_id = eq.question_id "
+                        "JOIN question_methodologies methodology "
+                        "ON methodology.question_id = eq.question_id "
+                        "WHERE eq.exam_id = %s "
+                        "GROUP BY eco.eco_domain_id, methodology.methodology_id",
+                        (exam_id,),
+                    ).fetchall()
+                self.assertEqual(
+                    {
+                        (row["eco_domain_id"], row["methodology_id"]): row["count"]
+                        for row in distributions
+                    },
+                    OFFICIAL_EXAM_DISTRIBUTIONS[length],
+                )
             self.client.post(
                 f"/exams/{exam_id}/answer",
                 data={"question_id": first_question, "action": "finish"},
@@ -927,7 +1190,7 @@ class SimulatorTestCase(unittest.TestCase):
             exam = db.execute(
                 "SELECT * FROM exams WHERE id = %s", (exam_id,)
             ).fetchone()
-            self.assertEqual(exam["expires_at"] - exam["started_at"], 30 * 76)
+            self.assertEqual(exam["expires_at"] - exam["started_at"], 30 * 80)
             self.assertEqual(
                 db.execute(
                     "SELECT COUNT(*) AS count FROM user_question_states"

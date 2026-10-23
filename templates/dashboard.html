@@ -14,6 +14,31 @@
     <div class="stat-card"><strong>{{ stats.favorites or 0 }}</strong><span>Favoritas</span></div>
   </section>
   <section class="panel">
+    <h2>Consistencia por tema</h2>
+    <p class="muted">Promedio de tus hasta tres intentos más recientes en cada tema de la ruta correspondiente.</p>
+    <div class="consistency-list">
+      {% for metric in consistency %}
+        <div class="consistency-item">
+          <div class="metric-heading">
+            <div><span class="eyebrow">{{ metric.route }}</span><strong>{{ metric.label }}</strong></div>
+            {% if metric.consistency is not none %}
+              <span>Tu consistencia actual en tema {{ metric.label }}: {{ metric.consistency }}%
+                (Promedio de tus últimas {{ metric.attempt_count }} pruebas)</span>
+            {% else %}
+              <span class="muted">Aún sin intentos</span>
+            {% endif %}
+          </div>
+          {% if metric.consistency is not none %}
+            <div class="metric-track" role="progressbar" aria-label="Consistencia {{ metric.label }}"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ metric.consistency }}">
+              <span style="width: {{ metric.consistency }}%"></span>
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+  <section class="panel">
     <div class="section-heading">
       <h2>Pruebas recientes</h2>
       <a href="{{ url_for('personal_bank') }}">Ver mi banco</a>

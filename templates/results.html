@@ -4,12 +4,45 @@
   <p class="eyebrow">Prueba {{ exam.id }} · {% if exam.status == "expired" %}Tiempo agotado{% else %}Finalizada{% endif %}</p>
   <h1>Resultados</h1>
   <p class="muted">{{ exam.requested_count }} preguntas · Iniciada {{ exam.started_at|datetime }}</p>
+  <section class="panel score-summary">
+    <h2>Score global</h2>
+    <p class="score-value">{{ counts.score }}%</p>
+    <p class="muted">Línea base de referencia: 70%</p>
+  </section>
   <section class="stat-grid result-grid">
     <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='correct') }}"><strong>{{ counts.correct or 0 }}</strong><span>Buenas</span></a>
     <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='incorrect') }}"><strong>{{ counts.incorrect or 0 }}</strong><span>Malas</span></a>
     <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}"><strong>{{ (counts.correct or 0) + (counts.incorrect or 0) }}</strong><span>Ambas</span></a>
     <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='pending') }}"><strong>{{ counts.pending or 0 }}</strong><span>Guardadas</span></a>
   </section>
+  {% if official_exam %}
+    <section class="panel performance-breakdown">
+      <h2>Radiografía del simulacro oficial</h2>
+      <p class="muted">Porcentaje de respuestas correctas por tema. Línea base: 70%.</p>
+      {% for axis, title in [("eco", "Dominios ECO 2026"), ("methodology", "Enfoques de desarrollo")] %}
+        <h3>{{ title }}</h3>
+        <div class="metric-list">
+          {% for metric in breakdown[axis] %}
+            <div class="performance-metric">
+              <div class="metric-heading">
+                <strong>{{ metric.label }}</strong>
+                {% if metric.score is not none %}
+                  <span>{{ metric.score }}% · {{ metric.correct }}/{{ metric.total }}</span>
+                {% else %}
+                  <span>Sin preguntas</span>
+                {% endif %}
+              </div>
+              <div class="metric-track" role="progressbar" aria-label="{{ metric.label }}"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ metric.score or 0 }}">
+                <span style="width: {{ metric.score or 0 }}%"></span>
+                <i aria-hidden="true"></i>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </section>
+  {% endif %}
   <div class="actions">
     <a class="button" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}">Revisar respuestas</a>
     <a class="button secondary" href="{{ url_for('dashboard') }}">Volver al inicio</a>

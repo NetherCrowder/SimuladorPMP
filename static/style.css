@@ -75,6 +75,19 @@ input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 3px 
 .stat-card strong { font-size: 2rem; line-height: 1.1; }
 .stat-card span { color: var(--muted); }
 .result-grid .stat-card:hover { border-color: var(--blue); }
+.score-summary { margin: 1.5rem 0; text-align: center; }
+.score-summary h2, .score-summary p { margin-bottom: .35rem; }
+.score-value { color: var(--blue-dark); font-size: 2.5rem; font-weight: 800; }
+.performance-breakdown { margin: 1.5rem 0; }
+.performance-breakdown h3 { margin: 1.5rem 0 .75rem; }
+.metric-list, .consistency-list { display: grid; gap: 1rem; }
+.consistency-list { margin-top: 1rem; }
+.consistency-item { padding: .75rem 0; border-top: 1px solid var(--border); }
+.metric-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.metric-heading .eyebrow { display: block; margin-bottom: .1rem; }
+.metric-track { position: relative; height: .7rem; overflow: hidden; margin-top: .45rem; border-radius: 1rem; background: #e4eaf1; }
+.metric-track > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
+.metric-track > i { position: absolute; top: 0; bottom: 0; left: 70%; border-left: 2px solid var(--red); }
 .panel { padding: 1.25rem; }
 .section-heading { justify-content: space-between; gap: 1rem; }
 .section-heading h2, .section-heading p { margin-bottom: 0; }

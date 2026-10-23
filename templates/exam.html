@@ -72,7 +72,7 @@
             <div class="exam-artifact-container">
               <img class="question-artifact-preview exam-artifact {% if current.question_type == 'hotspot' %}hotspot-image{% endif %}"
                    src="{{ url_for('static', filename=current.content.image_path) }}"
-                   alt="Artefacto gráfico de la pregunta"
+                   alt="{{ current.content.alt_text or 'Artefacto gráfico de la pregunta' }}"
                    {% if current.question_type == "hotspot" %}data-hotspot-image{% endif %}>
               {% if current.question_type == "hotspot" %}
                 <svg class="hotspot-click-area" viewBox="0 0 100 100" preserveAspectRatio="none" role="application" tabindex="0" aria-label="Área interactiva: haz clic o usa las flechas para posicionar el punto y Enter para seleccionarlo" data-hotspot-canvas>

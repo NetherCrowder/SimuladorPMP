@@ -5,6 +5,8 @@
   const imagePreview = document.getElementById("admin-artifact-preview");
   const adminImage = document.getElementById("admin-artifact-image");
   const hotspotRegion = document.getElementById("hotspot-admin-region");
+  const adminImageWidth = document.querySelector('[name="hotspot_image_width"]');
+  const adminImageHeight = document.querySelector('[name="hotspot_image_height"]');
   const caseQuestionCount = document.getElementById("case-question-count");
   const caseEditors = [...document.querySelectorAll("[data-case-editor]")];
   if (!typeSelect || !description) return;
@@ -64,6 +66,13 @@
     }
   };
 
+  const updateImageDimensions = () => {
+    if (!adminImage || !adminImageWidth || !adminImageHeight ||
+        !adminImage.naturalWidth || !adminImage.naturalHeight) return;
+    adminImageWidth.value = String(adminImage.naturalWidth);
+    adminImageHeight.value = String(adminImage.naturalHeight);
+  };
+
   imageInput?.addEventListener("change", () => {
     const file = imageInput.files[0];
     if (!file || !adminImage || !imagePreview) return;
@@ -71,6 +80,8 @@
     imagePreview.hidden = false;
   });
   if (adminImage) {
+    adminImage.addEventListener("load", updateImageDimensions);
+    updateImageDimensions();
     adminImage.addEventListener("click", (event) => {
       if (typeSelect.value !== "hotspot") return;
       const bounds = adminImage.getBoundingClientRect();

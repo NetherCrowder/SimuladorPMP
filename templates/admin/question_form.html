@@ -69,6 +69,9 @@
     </section>
 
     <section class="question-type-fields" data-question-type="visual_based hotspot">
+      <label>Texto alternativo de la imagen
+        <input name="alt_text" type="text" value="{{ question.alt_text if editing else request.form.get('alt_text', '') }}">
+      </label>
       <label>Imagen o artefacto gráfico (PNG, JPG o WebP)
         <input name="image" type="file" accept=".png,.jpg,.jpeg,.webp" {% if not editing or not question.content.get("image_path") %}required{% endif %}>
       </label>
@@ -93,6 +96,8 @@
 
     <section class="question-type-fields" data-question-type="hotspot">
       <p class="form-hint">Coordenadas de la zona correcta, expresadas como porcentaje del ancho y alto de la imagen.</p>
+      <input type="hidden" name="hotspot_image_width" value="{{ question.content.image_dimensions.width if editing and question.content.get('image_dimensions') else '' }}">
+      <input type="hidden" name="hotspot_image_height" value="{{ question.content.image_dimensions.height if editing and question.content.get('image_dimensions') else '' }}">
       <div class="hotspot-coordinates">
         {% for coordinate, label in [("x", "X inicial"), ("y", "Y inicial"), ("width", "Ancho"), ("height", "Alto")] %}
           <label>{{ label }} (%)
@@ -106,26 +111,27 @@
       <textarea name="explanation" rows="4" required>{{ question.explanation if editing else request.form.get("explanation", "") }}</textarea>
     </label>
 
-    <div class="filter-grid">
-      <fieldset class="panel">
-        <legend>Dominio oficial</legend>
-        {% for key, label in eco_domains.items() %}
-          <label class="check-row"><input type="checkbox" name="official_domains" value="{{ key }}" {% if key in selected.official %}checked{% endif %}>{{ label }}</label>
-        {% endfor %}
-      </fieldset>
-      <fieldset class="panel">
-        <legend>Enfoque metodológico</legend>
-        {% for key, label in methodologies.items() %}
-          <label class="check-row"><input type="checkbox" name="methodological_approaches" value="{{ key }}" {% if key in selected.methodology %}checked{% endif %}>{{ label }}</label>
-        {% endfor %}
-      </fieldset>
-      <fieldset class="panel">
-        <legend>Dominio de desempeño</legend>
+    <fieldset class="panel">
+      <legend>Tags obligatorios de la pregunta</legend>
+      <fieldset class="tag-selection">
+        <legend>Dominio de desempeño (PMBOK v8)</legend>
         {% for key, label in performance_domains.items() %}
-          <label class="check-row"><input type="checkbox" name="performance_domains" value="{{ key }}" {% if key in selected.performance %}checked{% endif %}>{{ label }}</label>
+          <label class="check-row"><input type="radio" name="performance_domain" value="{{ key }}" required {% if selected.performance and selected.performance[0] == key %}checked{% endif %}> {{ label }}</label>
         {% endfor %}
       </fieldset>
-    </div>
+      <fieldset class="tag-selection">
+        <legend>Dominio ECO 2026</legend>
+        {% for key, label in eco_domains.items() %}
+          <label class="check-row"><input type="radio" name="eco_domain" value="{{ key }}" required {% if selected.official and selected.official[0] == key %}checked{% endif %}> {{ label }}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset class="tag-selection">
+        <legend>Enfoque de desarrollo</legend>
+        {% for key, label in methodologies.items() %}
+          <label class="check-row"><input type="radio" name="methodology" value="{{ key }}" required {% if selected.methodology and selected.methodology[0] == key %}checked{% endif %}> {{ label }}</label>
+        {% endfor %}
+      </fieldset>
+    </fieldset>
     <button class="button" type="submit">{{ "Guardar cambios" if editing else "Agregar pregunta" }}</button>
   </form>
 {% endblock %}

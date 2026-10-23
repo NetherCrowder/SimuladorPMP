@@ -2,6 +2,7 @@ import json
 import html
 import math
 import os
+import random
 import re
 import secrets
 import time
@@ -35,25 +36,43 @@ PERFORMANCE_DOMAINS = {
     "finance": "Finanzas (Finance)",
     "stakeholders": "Interesados (Stakeholders)",
     "resources": "Recursos (Resources)",
-    "risk": "Riesgo (Risk)",
+    "risk": "Riesgos (Risk)",
 }
 METHODOLOGIES = {
-    "predictive": "Predictiva",
-    "agile": "Ágil",
-    "hybrid": "Híbrida",
+    "predictive": "Predictivo",
+    "agile_hybrid": "Ágil/Híbrido",
 }
 ECO_DOMAINS = {
     "processes": "Procesos",
     "people": "Personas",
-    "business_environment": "Entorno Empresarial",
+    "business_environment": "Entorno de Negocio",
 }
 VALID_COMBINATIONS = tuple(
     (methodology, eco_domain)
     for methodology in METHODOLOGIES
     for eco_domain in ECO_DOMAINS
 )
-EXAM_LENGTHS = (30, 60, 75, 180)
-SECONDS_PER_QUESTION = 76
+PRACTICE_LENGTHS = (15, 30)
+OFFICIAL_EXAM_LENGTHS = (60, 180)
+SECONDS_PER_QUESTION = 80
+OFFICIAL_EXAM_DISTRIBUTIONS = {
+    60: {
+        ("people", "agile_hybrid"): 12,
+        ("people", "predictive"): 8,
+        ("processes", "agile_hybrid"): 15,
+        ("processes", "predictive"): 10,
+        ("business_environment", "agile_hybrid"): 9,
+        ("business_environment", "predictive"): 6,
+    },
+    180: {
+        ("people", "agile_hybrid"): 36,
+        ("people", "predictive"): 23,
+        ("processes", "agile_hybrid"): 44,
+        ("processes", "predictive"): 30,
+        ("business_environment", "agile_hybrid"): 28,
+        ("business_environment", "predictive"): 19,
+    },
+}
 QUESTION_TYPES = {
     "case_set": (
         "Case/Scenario Set",
@@ -363,76 +382,110 @@ def create_app(test_config=None):
             "FROM exams WHERE user_id = %s ORDER BY started_at DESC LIMIT 5",
             (user_id,),
         ).fetchall()
+        consistency = practice_consistency(db, user_id)
         return render_template(
-            "dashboard.html", stats=stats, recent_exams=recent_exams
+            "dashboard.html",
+            stats=stats,
+            recent_exams=recent_exams,
+            consistency=consistency,
         )
 
     @app.get("/practice")
     @login_required
     def practice_setup():
-        db = get_db()
-        valid_combinations = {
-            (row["methodology_id"], row["eco_domain_id"])
-            for row in db.execute(
-                "SELECT methodology_id, eco_domain_id FROM valid_combinations"
-            ).fetchall()
-        }
-        available_count = None
         selected = {
-            "performance": request.args.getlist("performance"),
-            "methodology": request.args.getlist("methodology"),
-            "eco": request.args.getlist("eco"),
+            "axis": request.args.get("axis", ""),
+            "values": request.args.getlist("category"),
+            "length": request.args.get("length", ""),
         }
-        try:
-            filters = validate_filters(db, selected)
-            available_count = count_matching_questions(db, filters)
-        except ValueError:
-            pass
         return render_template(
             "practice_setup.html",
             selected=selected,
-            valid_combinations=sorted(valid_combinations),
-            available_count=available_count,
-            exam_lengths=EXAM_LENGTHS,
+            available_count=None,
+            practice_lengths=PRACTICE_LENGTHS,
+            official_exam_lengths=OFFICIAL_EXAM_LENGTHS,
+            seconds_per_question=SECONDS_PER_QUESTION,
         )
 
     @app.get("/practice/availability")
     @login_required
     def practice_availability():
+        mode = request.args.get("mode", "practice")
+        try:
+            requested_count = int(request.args.get("length", ""))
+        except ValueError:
+            return jsonify(error="Tamaño de prueba no válido."), 400
+        if mode == "official":
+            if requested_count not in OFFICIAL_EXAM_LENGTHS:
+                return jsonify(error="El simulacro debe tener 60 o 180 preguntas."), 400
+            db = get_db()
+            available, shortages = count_official_question_availability(
+                db, requested_count
+            )
+            ready = not shortages
+            message = (
+                f"Preguntas compatibles disponibles: {available}."
+                if ready
+                else "No hay suficientes preguntas clasificadas para completar la distribución oficial."
+            )
+            return jsonify(available=available, ready=ready, message=message)
+        if mode != "practice" or requested_count not in PRACTICE_LENGTHS:
+            return jsonify(error="Selecciona un modo y tamaño de práctica válidos."), 400
         selected = {
-            "performance": request.args.getlist("performance"),
-            "methodology": request.args.getlist("methodology"),
-            "eco": request.args.getlist("eco"),
+            "axis": request.args.get("axis", ""),
+            "values": request.args.getlist("category"),
         }
         try:
             filters = validate_filters(get_db(), selected)
         except ValueError as error:
             return jsonify(error=str(error)), 400
-        return jsonify(available=count_matching_questions(get_db(), filters))
+        available = count_matching_questions(get_db(), filters)
+        return jsonify(
+            available=available,
+            ready=available >= requested_count,
+            message=f"Preguntas compatibles disponibles: {available}.",
+        )
 
     @app.post("/practice/start")
     @login_required
     def start_exam():
         db = get_db()
-        selected = {
-            "performance": request.form.getlist("performance"),
-            "methodology": request.form.getlist("methodology"),
-            "eco": request.form.getlist("eco"),
-        }
-        try:
-            filters = validate_filters(db, selected)
-        except ValueError as error:
-            flash(str(error), "error")
-            return redirect(url_for("practice_setup"))
-
         try:
             requested_count = int(request.form.get("length", ""))
-        except ValueError:
+        except ValueError as error:
             abort(400, "Tamaño de examen no válido.")
-        if requested_count not in EXAM_LENGTHS:
-            abort(400, "Tamaño de examen no válido.")
+        mode = request.form.get("mode") or (
+            "official" if requested_count in OFFICIAL_EXAM_LENGTHS else "practice"
+        )
+        if mode == "practice":
+            if requested_count not in PRACTICE_LENGTHS:
+                abort(400, "Las prácticas cortas deben tener 15 o 30 preguntas.")
+            selected = {
+                "axis": request.form.get("axis", ""),
+                "values": request.form.getlist("category"),
+            }
+            try:
+                filters = validate_filters(db, selected)
+            except ValueError as error:
+                flash(str(error), "error")
+                return redirect(url_for("practice_setup"))
+            filters["mode"] = "practice"
+            questions = matching_questions(db, filters, requested_count)
+        elif mode == "official":
+            if requested_count not in OFFICIAL_EXAM_LENGTHS:
+                abort(400, "Los simulacros oficiales deben tener 60 o 180 preguntas.")
+            filters = {"mode": "official"}
+            questions, shortages = official_exam_questions(db, requested_count)
+            if shortages:
+                flash(
+                    "No hay suficientes preguntas etiquetadas para completar la "
+                    "distribución ECO y de enfoque requerida.",
+                    "error",
+                )
+                return redirect(url_for("practice_setup"))
+        else:
+            abort(400, "Modo de prueba no válido.")
 
-        questions = matching_questions(db, filters, requested_count)
         if len(questions) < requested_count:
             flash(
                 f"Hay {len(questions)} preguntas compatibles; se necesitan "
@@ -614,7 +667,11 @@ def create_app(test_config=None):
                 return redirect(url_for("take_exam", exam_id=exam_id))
         rows = db.execute(
             "SELECT q.question_type, q.content_json, q.correct_answer_json, "
-            "q.correct_option, eq.marked_saved, a.selected_option, a.response_json "
+            "q.correct_option, eq.marked_saved, a.selected_option, a.response_json, "
+            "(SELECT eco_domain_id FROM question_eco_domains "
+            "WHERE question_id = q.id LIMIT 1) AS eco_domain_id, "
+            "(SELECT methodology_id FROM question_methodologies "
+            "WHERE question_id = q.id LIMIT 1) AS methodology_id "
             "FROM exam_questions eq JOIN questions q ON q.id = eq.question_id "
             "LEFT JOIN exam_answers a ON a.exam_id = eq.exam_id "
             "AND a.question_id = eq.question_id WHERE eq.exam_id = %s",
@@ -630,7 +687,52 @@ def create_app(test_config=None):
                 counts["correct"] += 1
             else:
                 counts["incorrect"] += 1
-        return render_template("results.html", exam=exam, counts=counts)
+        counts["score"] = (
+            round(counts["correct"] * 100 / counts["total"])
+            if counts["total"]
+            else 0
+        )
+        exam_filters = json.loads(exam["filters_json"])
+        official_exam = exam_filters.get("mode") == "official"
+        breakdown = {}
+        if official_exam:
+            for axis, labels in (
+                ("eco", ECO_DOMAINS),
+                ("methodology", METHODOLOGIES),
+            ):
+                row_key = "eco_domain_id" if axis == "eco" else "methodology_id"
+                axis_breakdown = []
+                for category_id, label in labels.items():
+                    relevant = [
+                        row for row in rows
+                        if row[row_key] == category_id
+                        or (
+                            axis == "methodology"
+                            and category_id == "agile_hybrid"
+                            and row[row_key] in {"agile", "hybrid"}
+                        )
+                    ]
+                    correct = sum(exam_response_is_correct(row) for row in relevant)
+                    axis_breakdown.append(
+                        {
+                            "label": label,
+                            "correct": correct,
+                            "total": len(relevant),
+                            "score": (
+                                round(correct * 100 / len(relevant))
+                                if relevant
+                                else None
+                            ),
+                        }
+                    )
+                breakdown[axis] = axis_breakdown
+        return render_template(
+            "results.html",
+            exam=exam,
+            counts=counts,
+            official_exam=official_exam,
+            breakdown=breakdown,
+        )
 
     @app.get("/exams/<int:exam_id>/review")
     @login_required
@@ -916,9 +1018,9 @@ def create_app(test_config=None):
     def admin_questions():
         db = get_db()
         manual = db.execute(
-            "SELECT b.id, b.question_id, b.question, b.added_at, b.status, "
-            "q.question_type, "
-            "NULL AS validation_status, q.active "
+            "SELECT b.id, b.question_id, b.stem AS question, b.added_at, "
+            "CASE WHEN b.status THEN 'active' ELSE 'inactive' END AS status, "
+            "q.question_type, NULL AS validation_status, q.active "
             "FROM manual_question_bank b LEFT JOIN questions q ON q.id = b.question_id"
         ).fetchall()
         automated = db.execute(
@@ -955,7 +1057,13 @@ def create_app(test_config=None):
             "admin/question_form.html",
             kind=kind,
             question=None,
-            selected={"official": [], "methodology": [], "performance": []},
+            selected={
+                "axis": "",
+                "value": "",
+                "performance": [],
+                "official": [],
+                "methodology": [],
+            },
         )
 
     @app.route("/admin/questions/<kind>/<int:bank_id>/edit", methods=["GET", "POST"])
@@ -991,10 +1099,25 @@ def create_app(test_config=None):
             db.commit()
             flash("Pregunta actualizada.", "success")
             return redirect(url_for("admin_questions"))
+        tags = db.execute(
+            "SELECT "
+            "(SELECT domain_id FROM question_performance_domains "
+            "WHERE question_id = q.id LIMIT 1) AS performance_domain, "
+            "(SELECT eco_domain_id FROM question_eco_domains "
+            "WHERE question_id = q.id LIMIT 1) AS eco_domain, "
+            "(SELECT methodology_id FROM question_methodologies "
+            "WHERE question_id = q.id LIMIT 1) AS methodology "
+            "FROM questions q WHERE q.id = %s",
+            (question["id"],),
+        ).fetchone()
         selected = {
-            "official": json.loads(bank_entry["official_domains_json"]),
-            "methodology": json.loads(bank_entry["methodological_approaches_json"]),
-            "performance": json.loads(bank_entry["performance_domains_json"]),
+            "axis": "",
+            "value": tags["performance_domain"] or "",
+            "performance": [tags["performance_domain"]]
+            if tags["performance_domain"]
+            else [],
+            "official": [tags["eco_domain"]] if tags["eco_domain"] else [],
+            "methodology": [tags["methodology"]] if tags["methodology"] else [],
         }
         question = question_form_values(question, selected)
         return render_template(
@@ -1029,7 +1152,7 @@ def create_app(test_config=None):
         if kind == "manual":
             result = db.execute(
                 f"UPDATE {table} SET status = %s WHERE id = %s RETURNING question_id",
-                (status, bank_id),
+                (active, bank_id),
             )
         else:
             result = db.execute(
@@ -1180,10 +1303,16 @@ def create_superuser_account(
 
 
 def admin_question_selections():
+    performance = request.form.get("performance_domain", "")
+    official = request.form.get("eco_domain", "")
+    methodology = request.form.get("methodology", "")
     return {
-        "official": request.form.getlist("official_domains"),
-        "methodology": request.form.getlist("methodological_approaches"),
-        "performance": request.form.getlist("performance_domains"),
+        "axis": "",
+        "value": performance,
+        "category_type": "performance_domain",
+        "official": [official] if official else [],
+        "methodology": [methodology] if methodology else [],
+        "performance": [performance] if performance else [],
     }
 
 
@@ -1192,6 +1321,7 @@ def question_form_values(question, selected):
     item["options_text"] = "\n".join(json.loads(item["options_json"]))
     item["question_type"] = item.get("question_type", "multiple_choice")
     item["content"] = json.loads(item.get("content_json", "{}"))
+    item["alt_text"] = item["content"].get("alt_text", "")
     item["correct_answer"] = json.loads(item.get("correct_answer_json", "0"))
     item["correct_option"] = (
         item["correct_answer"] + 1 if type(item["correct_answer"]) is int else ""
@@ -1241,6 +1371,7 @@ def question_form_values(question, selected):
                 f"hotspot_{key}", item[f"hotspot_{key}"]
             )
         item["explanation"] = request.form.get("explanation", item["explanation"])
+        item["alt_text"] = request.form.get("alt_text", item["alt_text"])
     item["selected"] = selected
     return item
 
@@ -1256,6 +1387,15 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
         errors.append("La pregunta y su retroalimentación son obligatorias.")
     if question_type not in QUESTION_TYPES:
         errors.append("Selecciona un tipo de pregunta válido.")
+    if (
+        len(selected["performance"]) != 1
+        or selected["performance"][0] not in PERFORMANCE_DOMAINS
+        or len(selected["official"]) != 1
+        or selected["official"][0] not in ECO_DOMAINS
+        or len(selected["methodology"]) != 1
+        or selected["methodology"][0] not in METHODOLOGIES
+    ):
+        errors.append("Selecciona un tag válido en cada uno de los tres ejes.")
 
     options = []
     content = {}
@@ -1327,8 +1467,17 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
         options = [line.strip() for line in values.get("drag_items", "").splitlines() if line.strip()]
         targets = [line.strip() for line in values.get("drag_targets", "").splitlines() if line.strip()]
         correct_answer = parse_option_indexes(values.get("drag_matches", ""), len(targets), errors)
-        if len(options) < 2 or len(targets) < 2 or len(options) != len(correct_answer):
-            errors.append("Agrega conceptos, destinos y una correspondencia válida para cada concepto.")
+        if (
+            len(options) < 2
+            or len(targets) < 2
+            or len(options) != len(targets)
+            or len(options) != len(correct_answer)
+            or set(correct_answer) != set(range(len(targets)))
+        ):
+            errors.append(
+                "Agrega igual número de conceptos y destinos, con una correspondencia "
+                "única y válida para cada elemento."
+            )
         content["targets"] = targets
     elif question_type == "hotspot":
         uploaded = request.files.get("image")
@@ -1362,8 +1511,26 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
         except ValueError:
             errors.append("Define una zona Hotspot válida en porcentajes (0 a 100).")
             hotspot = {}
+        try:
+            image_width = int(values.get("hotspot_image_width", ""))
+            image_height = int(values.get("hotspot_image_height", ""))
+            if image_width <= 0 or image_height <= 0:
+                raise ValueError
+        except ValueError:
+            errors.append("No se pudieron determinar las dimensiones de la imagen Hotspot.")
+            image_width = image_height = 0
         content["image_path"] = image_path
         content["hotspot"] = hotspot
+        content["image_dimensions"] = {
+            "width": image_width,
+            "height": image_height,
+        }
+        content["hotspot_pixels"] = {
+            "x_min": hotspot.get("x", 0) * image_width / 100,
+            "y_min": hotspot.get("y", 0) * image_height / 100,
+            "x_max": (hotspot.get("x", 0) + hotspot.get("width", 0)) * image_width / 100,
+            "y_max": (hotspot.get("y", 0) + hotspot.get("height", 0)) * image_height / 100,
+        }
         correct_answer = hotspot
 
     if question_type == "visual_based":
@@ -1387,30 +1554,28 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
             errors.append("Sube una imagen para la pregunta Visual-Based.")
         content["image_path"] = image_path
 
-    try:
-        validate_filters(
-            db,
-            {
-                "performance": selected["performance"],
-                "methodology": selected["methodology"],
-                "eco": selected["official"],
-            },
-        )
-    except ValueError as error:
-        errors.append(str(error))
     if errors:
         return errors
 
+    if question_type in {"visual_based", "hotspot"}:
+        content["alt_text"] = values.get("alt_text", "").strip() or prompt
     uploaded = content.pop("uploaded_image", None)
     if uploaded:
         image_directory = os.path.join(current_app.static_folder, "uploads", "questions")
         os.makedirs(image_directory, exist_ok=True)
         uploaded.save(os.path.join(current_app.static_folder, content["image_path"]))
+    interaction_config = question_interaction_config(
+        question_type, prompt, options, correct_answer, content
+    )
     option_feedback = [explanation for _ in options]
     answer = json.dumps(correct_answer, ensure_ascii=False)
     active = int(
         kind == "manual"
-        and (bank_entry is None or bank_entry["status"] == "active")
+        and (
+            bank_entry is None
+            or bank_entry["status"] is True
+            or bank_entry["status"] == "active"
+        )
     )
     source_type = "general" if kind == "manual" else "automated"
     if existing_question is None:
@@ -1435,45 +1600,64 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
             ),
         ).fetchone()
         question_id = question["id"]
-        for domain in selected["performance"]:
-            db.execute(
-                "INSERT INTO question_performance_domains VALUES (%s, %s)",
-                (question_id, domain),
-            )
-        for methodology in selected["methodology"]:
-            db.execute(
-                "INSERT INTO question_methodologies VALUES (%s, %s)",
-                (question_id, methodology),
-            )
-        for eco_domain in selected["official"]:
-            db.execute(
-                "INSERT INTO question_eco_domains VALUES (%s, %s)",
-                (question_id, eco_domain),
-            )
-        table = f"{kind}_question_bank"
         db.execute(
-            f"INSERT INTO {table} "
-            "(question_id, question, official_domains_json, "
-            "methodological_approaches_json, performance_domains_json, answer, "
-            "feedback, added_at, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (
-                question_id,
-                prompt,
-                json.dumps(selected["official"]),
-                json.dumps(selected["methodology"]),
-                json.dumps(selected["performance"]),
-                answer,
-                explanation,
-                time.time(),
-                "active" if kind == "manual" else "inactive",
-            ),
+            "INSERT INTO question_performance_domains VALUES (%s, %s)",
+            (question_id, selected["performance"][0]),
         )
+        db.execute(
+            "INSERT INTO question_methodologies VALUES (%s, %s)",
+            (question_id, selected["methodology"][0]),
+        )
+        db.execute(
+            "INSERT INTO question_eco_domains VALUES (%s, %s)",
+            (question_id, selected["official"][0]),
+        )
+        table = f"{kind}_question_bank"
         if kind == "automated":
+            db.execute(
+                f"INSERT INTO {table} "
+                "(question_id, question, official_domains_json, "
+                "methodological_approaches_json, performance_domains_json, answer, "
+                "feedback, added_at, status, interaction_config) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    question_id,
+                    prompt,
+                    json.dumps(selected["official"]),
+                    json.dumps(selected["methodology"]),
+                    json.dumps(selected["performance"]),
+                    answer,
+                    explanation,
+                    time.time(),
+                    "inactive",
+                    json.dumps(interaction_config, ensure_ascii=False),
+                ),
+            )
             db.execute(
                 "UPDATE automated_question_bank SET validation_status = 'pending' "
                 "WHERE question_id = %s",
                 (question_id,),
+            )
+        else:
+            db.execute(
+                "INSERT INTO manual_question_bank "
+                "(question_id, stem, options, correct_answer, category_type, "
+                "category_value, interaction_config, feedback, added_at, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, TRUE)",
+                (
+                    question_id,
+                    prompt,
+                    json.dumps(
+                        {chr(65 + index): option for index, option in enumerate(options)},
+                        ensure_ascii=False,
+                    ),
+                    format_bank_answer(question_type, correct_answer),
+                    selected["category_type"],
+                    selected["value"],
+                    json.dumps(interaction_config, ensure_ascii=False),
+                    explanation,
+                    time.time(),
+                ),
             )
         return []
 
@@ -1499,33 +1683,34 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
     db.execute("DELETE FROM question_performance_domains WHERE question_id = %s", (question_id,))
     db.execute("DELETE FROM question_methodologies WHERE question_id = %s", (question_id,))
     db.execute("DELETE FROM question_eco_domains WHERE question_id = %s", (question_id,))
-    for domain in selected["performance"]:
-        db.execute(
-            "INSERT INTO question_performance_domains VALUES (%s, %s)",
-            (question_id, domain),
-        )
-    for methodology in selected["methodology"]:
-        db.execute(
-            "INSERT INTO question_methodologies VALUES (%s, %s)",
-            (question_id, methodology),
-        )
-    for eco_domain in selected["official"]:
-        db.execute(
-            "INSERT INTO question_eco_domains VALUES (%s, %s)",
-            (question_id, eco_domain),
-        )
+    db.execute(
+        "INSERT INTO question_performance_domains VALUES (%s, %s)",
+        (question_id, selected["performance"][0]),
+    )
+    db.execute(
+        "INSERT INTO question_methodologies VALUES (%s, %s)",
+        (question_id, selected["methodology"][0]),
+    )
+    db.execute(
+        "INSERT INTO question_eco_domains VALUES (%s, %s)",
+        (question_id, selected["official"][0]),
+    )
     table = f"{kind}_question_bank"
     if kind == "manual":
         db.execute(
-            f"UPDATE {table} SET question = %s, official_domains_json = %s, "
-            "methodological_approaches_json = %s, performance_domains_json = %s, "
-            "answer = %s, feedback = %s WHERE id = %s",
+            f"UPDATE {table} SET stem = %s, options = %s::jsonb, "
+            "correct_answer = %s, category_type = %s, category_value = %s, "
+            "interaction_config = %s::jsonb, feedback = %s WHERE id = %s",
             (
                 prompt,
-                json.dumps(selected["official"]),
-                json.dumps(selected["methodology"]),
-                json.dumps(selected["performance"]),
-                answer,
+                json.dumps(
+                    {chr(65 + index): option for index, option in enumerate(options)},
+                    ensure_ascii=False,
+                ),
+                format_bank_answer(question_type, correct_answer),
+                selected["category_type"],
+                selected["value"],
+                json.dumps(interaction_config, ensure_ascii=False),
                 explanation,
                 bank_entry["id"],
             ),
@@ -1534,7 +1719,7 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
         db.execute(
             f"UPDATE {table} SET question = %s, official_domains_json = %s, "
             "methodological_approaches_json = %s, performance_domains_json = %s, "
-            "answer = %s, feedback = %s, status = 'inactive', "
+            "answer = %s, feedback = %s, status = 'inactive', interaction_config = %s::jsonb, "
             "validation_status = 'pending' WHERE id = %s",
             (
                 prompt,
@@ -1543,10 +1728,119 @@ def save_admin_question(db, kind, bank_entry=None, existing_question=None):
                 json.dumps(selected["performance"]),
                 answer,
                 explanation,
+                json.dumps(interaction_config, ensure_ascii=False),
                 bank_entry["id"],
             ),
         )
     return []
+
+
+def format_bank_answer(question_type, correct_answer):
+    if question_type in {"multiple_choice", "visual_based"}:
+        return chr(65 + correct_answer) if isinstance(correct_answer, int) else ""
+    if question_type == "multiple_responses":
+        return ",".join(chr(65 + index) for index in correct_answer)
+    return {
+        "case_set": "CASE_SET",
+        "drag_drop": "DRAG_DROP",
+        "hotspot": "HOTSPOT",
+        "pull_down": "PULL_DOWN",
+    }.get(question_type, "")
+
+
+def question_interaction_config(question_type, prompt, options, correct_answer, content):
+    def option_map(values):
+        return {
+            chr(65 + index): value
+            for index, value in enumerate(values)
+        }
+
+    if question_type == "case_set":
+        return {
+            "case_text": prompt,
+            "sub_questions": [
+                {
+                    "sub_id": index,
+                    "stem": child["prompt"],
+                    "options": option_map(child["options"]),
+                    "correct_answer": chr(65 + child["correct_option"]),
+                }
+                for index, child in enumerate(content["questions"], start=1)
+            ],
+        }
+    if question_type in {"visual_based", "hotspot"}:
+        hotspot = content.get("hotspot_pixels", content.get("hotspot", {}))
+        target_area = (
+            {
+                "x_min": hotspot.get("x_min", hotspot.get("x", 0)),
+                "y_min": hotspot.get("y_min", hotspot.get("y", 0)),
+                "x_max": hotspot.get(
+                    "x_max", hotspot.get("x", 0) + hotspot.get("width", 0)
+                ),
+                "y_max": hotspot.get(
+                    "y_max", hotspot.get("y", 0) + hotspot.get("height", 0)
+                ),
+            }
+            if question_type == "hotspot"
+            else {}
+        )
+        return {
+            "media_url": f"/static/{content.get('image_path', '')}",
+            "alt_text": content.get("alt_text", prompt),
+            "interaction_mode": "hotspot" if question_type == "hotspot" else "multiple_choice",
+            "target_area": target_area,
+            "options": option_map(options) if question_type == "visual_based" else {},
+        }
+    if question_type in {"multiple_choice", "multiple_responses"}:
+        answers = (
+            [correct_answer]
+            if isinstance(correct_answer, int)
+            else correct_answer
+        )
+        return {
+            "max_Selections": 1 if question_type == "multiple_choice" else len(answers),
+            "options": option_map(options),
+            "correct_answers": [chr(65 + index) for index in answers],
+        }
+    if question_type == "drag_drop":
+        source_items = [
+            {"id": f"s{index}", "text": item}
+            for index, item in enumerate(options, start=1)
+        ]
+        return {
+            "source_items": source_items,
+            "target_boxes": [
+                {
+                    "id": f"t{index}",
+                    "label": target,
+                    "accepts": next(
+                        (
+                            source_items[source_index]["id"]
+                            for source_index, matched_target in enumerate(correct_answer)
+                            if matched_target == index - 1
+                        ),
+                        "",
+                    ),
+                }
+                for index, target in enumerate(content["targets"], start=1)
+            ],
+        }
+    if question_type == "pull_down":
+        dropdowns = {}
+        blanks = re.split(r"\[\[blank\]\]", prompt)
+        template_parts = [blanks[0]]
+        for index, correct_index in enumerate(correct_answer, start=1):
+            blank_key = f"BLANK_{index}"
+            template_parts.extend([f"[{blank_key}]", blanks[index]])
+            dropdowns[blank_key] = {
+                "options": options,
+                "correct": options[correct_index],
+            }
+        return {
+            "template_text": "".join(template_parts),
+            "dropdowns": dropdowns,
+        }
+    return {}
 
 
 def parse_option_indexes(raw_value, option_count, errors, *, allow_duplicates=False):
@@ -1744,6 +2038,29 @@ def init_db():
         VALID_COMBINATIONS,
     )
     db.execute(
+        "WITH legacy_methods AS ("
+        "DELETE FROM question_methodologies "
+        "WHERE methodology_id IN ('agile', 'hybrid') RETURNING question_id"
+        ") INSERT INTO question_methodologies (question_id, methodology_id) "
+        "SELECT DISTINCT question_id, 'agile_hybrid' FROM legacy_methods "
+        "ON CONFLICT DO NOTHING"
+    )
+    db.execute(
+        "UPDATE manual_question_bank SET category_value = 'agile_hybrid' "
+        "WHERE category_value IN ('agile', 'hybrid')"
+    )
+    db.execute(
+        "UPDATE automated_question_bank "
+        "SET methodological_approaches_json = '[\"agile_hybrid\"]' "
+        "WHERE methodological_approaches_json IN ('[\"agile\"]', '[\"hybrid\"]')"
+    )
+    db.execute(
+        "UPDATE exams SET filters_json = jsonb_set("
+        "filters_json::jsonb, '{values}', '[\"agile_hybrid\"]'::jsonb)::text "
+        "WHERE filters_json::jsonb ->> 'axis' = 'methodology' "
+        "AND (filters_json::jsonb -> 'values') ?| ARRAY['agile', 'hybrid']"
+    )
+    db.execute(
         "INSERT INTO user_profiles (user_id, email, registration_date) "
         "SELECT id, email, created_at FROM users "
         "ON CONFLICT (user_id) DO NOTHING"
@@ -1752,78 +2069,237 @@ def init_db():
 
 
 def validate_filters(db, selected):
-    performance = list(dict.fromkeys(selected.get("performance", [])))
-    methodologies = list(dict.fromkeys(selected.get("methodology", [])))
-    eco_domains = list(dict.fromkeys(selected.get("eco", [])))
-    if not performance or not methodologies or not eco_domains:
-        raise ValueError("Selecciona al menos una categoría en cada grupo.")
-    if not set(performance).issubset(PERFORMANCE_DOMAINS):
-        raise ValueError("Hay un dominio de desempeño no válido.")
-    if not set(methodologies).issubset(METHODOLOGIES):
-        raise ValueError("Hay un enfoque metodológico no válido.")
-    if not set(eco_domains).issubset(ECO_DOMAINS):
-        raise ValueError("Hay un dominio oficial no válido.")
-    allowed = {
-        (row["methodology_id"], row["eco_domain_id"])
-        for row in db.execute(
-            "SELECT methodology_id, eco_domain_id FROM valid_combinations"
-        ).fetchall()
+    axis = selected.get("axis")
+    categories = list(dict.fromkeys(selected.get("values", [])))
+    taxonomies = {
+        "performance": PERFORMANCE_DOMAINS,
+        "methodology": METHODOLOGIES,
+        "eco": ECO_DOMAINS,
     }
-    if any((method, eco) not in allowed for method in methodologies for eco in eco_domains):
-        raise ValueError(
-            "La combinación entre enfoque metodológico y dominio oficial no está permitida."
-        )
-    return {
-        "performance": performance,
-        "methodology": methodologies,
-        "eco": eco_domains,
-    }
+    if axis not in taxonomies:
+        raise ValueError("Selecciona un eje de filtrado válido.")
+    if not categories:
+        raise ValueError("Selecciona al menos una categoría del eje elegido.")
+    if not set(categories).issubset(taxonomies[axis]):
+        raise ValueError("Hay una categoría no válida para el eje seleccionado.")
+    if axis != "performance" and len(categories) != 1:
+        raise ValueError("Esta ruta permite seleccionar una sola categoría.")
+    return {"axis": axis, "values": categories}
 
 
 def matching_questions(db, filters, limit):
-    performance_placeholders = ",".join("%s" for _ in filters["performance"])
-    methodology_placeholders = ",".join("%s" for _ in filters["methodology"])
-    eco_placeholders = ",".join("%s" for _ in filters["eco"])
+    axis_tables = {
+        "performance": ("question_performance_domains", "domain_id"),
+        "methodology": ("question_methodologies", "methodology_id"),
+        "eco": ("question_eco_domains", "eco_domain_id"),
+    }
+    table, column = axis_tables[filters["axis"]]
+    placeholders = ",".join("%s" for _ in filters["values"])
     query = (
         "SELECT q.id FROM questions q "
         "WHERE q.active = 1 "
-        "AND EXISTS (SELECT 1 FROM question_performance_domains d "
-        f"WHERE d.question_id = q.id AND d.domain_id IN ({performance_placeholders})) "
-        "AND EXISTS (SELECT 1 FROM question_methodologies m "
-        f"WHERE m.question_id = q.id AND m.methodology_id IN ({methodology_placeholders})) "
-        "AND EXISTS (SELECT 1 FROM question_eco_domains e "
-        f"WHERE e.question_id = q.id AND e.eco_domain_id IN ({eco_placeholders})) "
+        "AND EXISTS (SELECT 1 FROM question_performance_domains performance "
+        "WHERE performance.question_id = q.id) "
+        "AND EXISTS (SELECT 1 FROM question_eco_domains eco "
+        "WHERE eco.question_id = q.id) "
+        "AND EXISTS (SELECT 1 FROM question_methodologies methodology "
+        "WHERE methodology.question_id = q.id) "
+        f"AND EXISTS (SELECT 1 FROM {table} category "
+        f"WHERE category.question_id = q.id AND category.{column} IN ({placeholders})) "
         "ORDER BY RANDOM() LIMIT %s"
     )
-    params = (
-        *filters["performance"],
-        *filters["methodology"],
-        *filters["eco"],
-        limit,
-    )
+    params = (*filters["values"], limit)
     return db.execute(query, params).fetchall()
 
 
 def count_matching_questions(db, filters):
-    performance_placeholders = ",".join("%s" for _ in filters["performance"])
-    methodology_placeholders = ",".join("%s" for _ in filters["methodology"])
-    eco_placeholders = ",".join("%s" for _ in filters["eco"])
+    axis_tables = {
+        "performance": ("question_performance_domains", "domain_id"),
+        "methodology": ("question_methodologies", "methodology_id"),
+        "eco": ("question_eco_domains", "eco_domain_id"),
+    }
+    table, column = axis_tables[filters["axis"]]
+    placeholders = ",".join("%s" for _ in filters["values"])
     query = (
         "SELECT COUNT(*) AS count FROM questions q "
         "WHERE q.active = 1 "
-        "AND EXISTS (SELECT 1 FROM question_performance_domains d "
-        f"WHERE d.question_id = q.id AND d.domain_id IN ({performance_placeholders})) "
-        "AND EXISTS (SELECT 1 FROM question_methodologies m "
-        f"WHERE m.question_id = q.id AND m.methodology_id IN ({methodology_placeholders})) "
-        "AND EXISTS (SELECT 1 FROM question_eco_domains e "
-        f"WHERE e.question_id = q.id AND e.eco_domain_id IN ({eco_placeholders}))"
+        "AND EXISTS (SELECT 1 FROM question_performance_domains performance "
+        "WHERE performance.question_id = q.id) "
+        "AND EXISTS (SELECT 1 FROM question_eco_domains eco "
+        "WHERE eco.question_id = q.id) "
+        "AND EXISTS (SELECT 1 FROM question_methodologies methodology "
+        "WHERE methodology.question_id = q.id) "
+        f"AND EXISTS (SELECT 1 FROM {table} category "
+        f"WHERE category.question_id = q.id AND category.{column} IN ({placeholders}))"
     )
-    params = (
-        *filters["performance"],
-        *filters["methodology"],
-        *filters["eco"],
+    return db.execute(query, filters["values"]).fetchone()["count"]
+
+
+def official_cell_filter(eco_domain, methodology):
+    method_values = (
+        ("agile_hybrid", "agile", "hybrid")
+        if methodology == "agile_hybrid"
+        else (methodology,)
+    )
+    method_placeholders = ",".join("%s" for _ in method_values)
+    return (
+        "q.active = 1 "
+        "AND EXISTS (SELECT 1 FROM question_performance_domains performance "
+        "WHERE performance.question_id = q.id) "
+        "AND EXISTS (SELECT 1 FROM question_eco_domains eco "
+        "WHERE eco.question_id = q.id AND eco.eco_domain_id = %s) "
+        "AND EXISTS (SELECT 1 FROM question_methodologies methodology "
+        "WHERE methodology.question_id = q.id "
+        f"AND methodology.methodology_id IN ({method_placeholders}))",
+        (eco_domain, *method_values),
+    )
+
+
+def official_cell_query(db, eco_domain, methodology, limit=None):
+    conditions, params = official_cell_filter(eco_domain, methodology)
+    limit_sql = " LIMIT %s" if limit is not None else ""
+    query = (
+        "SELECT q.id FROM questions q "
+        f"WHERE {conditions} "
+        f"ORDER BY RANDOM(){limit_sql}"
+    )
+    if limit is not None:
+        params += (limit,)
+    return db.execute(query, params).fetchall()
+
+
+def official_cell_count(db, eco_domain, methodology):
+    conditions, params = official_cell_filter(eco_domain, methodology)
+    query = (
+        "SELECT COUNT(*) AS count FROM questions q "
+        f"WHERE {conditions}"
     )
     return db.execute(query, params).fetchone()["count"]
+
+
+def count_official_question_availability(db, requested_count):
+    distribution = OFFICIAL_EXAM_DISTRIBUTIONS[requested_count]
+    available = 0
+    shortages = []
+    for (eco_domain, methodology), required in distribution.items():
+        count = official_cell_count(db, eco_domain, methodology)
+        available += count
+        if count < required:
+            shortages.append(
+                {
+                    "eco_domain": eco_domain,
+                    "methodology": methodology,
+                    "available": count,
+                    "required": required,
+                }
+            )
+    return available, shortages
+
+
+def official_exam_questions(db, requested_count):
+    distribution = OFFICIAL_EXAM_DISTRIBUTIONS[requested_count]
+    questions = []
+    shortages = []
+    for (eco_domain, methodology), required in distribution.items():
+        cell_questions = official_cell_query(db, eco_domain, methodology, required)
+        if len(cell_questions) < required:
+            shortages.append(
+                {
+                    "eco_domain": eco_domain,
+                    "methodology": methodology,
+                    "available": len(cell_questions),
+                    "required": required,
+                }
+            )
+        questions.extend(cell_questions)
+    random.shuffle(questions)
+    return questions, shortages
+
+
+def practice_consistency(db, user_id):
+    axis_tables = {
+        "performance": (
+            "question_performance_domains",
+            "domain_id",
+            PERFORMANCE_DOMAINS,
+            "Ruta 1 · Dominios de desempeño",
+        ),
+        "eco": (
+            "question_eco_domains",
+            "eco_domain_id",
+            ECO_DOMAINS,
+            "Ruta 2 · Dominios ECO",
+        ),
+        "methodology": (
+            "question_methodologies",
+            "methodology_id",
+            METHODOLOGIES,
+            "Ruta 3 · Enfoques de desarrollo",
+        ),
+    }
+    result = []
+    for axis, (table, column, categories, route_label) in axis_tables.items():
+        rows = db.execute(
+            f"SELECT e.id AS exam_id, e.filters_json, e.ended_at, "
+            f"q.question_type, q.correct_answer_json, q.correct_option, "
+            f"a.response_json, a.selected_option, category.{column} AS category_id "
+            f"FROM exams e JOIN exam_questions eq ON eq.exam_id = e.id "
+            f"JOIN questions q ON q.id = eq.question_id "
+            f"JOIN {table} category ON category.question_id = q.id "
+            f"LEFT JOIN exam_answers a ON a.exam_id = e.id "
+            f"AND a.question_id = q.id "
+            f"WHERE e.user_id = %s AND e.status IN ('completed', 'expired') "
+            f"AND e.requested_count IN (15, 30) "
+            f"AND e.filters_json::jsonb ->> 'axis' = %s "
+            f"ORDER BY e.ended_at DESC, e.id DESC",
+            (user_id, axis),
+        ).fetchall()
+        attempts = {}
+        exam_totals = {}
+        for row in rows:
+            filters = json.loads(row["filters_json"])
+            category_id = row["category_id"]
+            if (
+                filters.get("mode", "practice") != "practice"
+                or filters.get("axis") != axis
+                or category_id not in filters.get("values", [])
+            ):
+                continue
+            key = (row["exam_id"], category_id)
+            total = exam_totals.setdefault(
+                key, {"ended_at": row["ended_at"], "correct": 0, "total": 0}
+            )
+            total["total"] += 1
+            if exam_response_is_correct(row):
+                total["correct"] += 1
+        for (exam_id, category_id), score in exam_totals.items():
+            attempts.setdefault(category_id, []).append((score["ended_at"], exam_id, score))
+        for category_id, label in categories.items():
+            category_attempts = sorted(
+                attempts.get(category_id, []),
+                key=lambda item: (item[0] or 0, item[1]),
+                reverse=True,
+            )[:3]
+            result.append(
+                {
+                    "route": route_label,
+                    "label": label,
+                    "attempt_count": len(category_attempts),
+                    "consistency": (
+                        round(
+                            sum(
+                                attempt["correct"] / attempt["total"] * 100
+                                for _, _, attempt in category_attempts
+                            )
+                            / len(category_attempts),
+                            1,
+                        )
+                        if category_attempts
+                        else None
+                    ),
+                }
+            )
+    return result
 
 
 def owned_exam(db, exam_id):
