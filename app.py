@@ -5,6 +5,8 @@ import os
 import random
 import re
 import secrets
+import tempfile
+import threading
 import time
 from functools import wraps
 
@@ -132,8 +134,15 @@ def render_rich_option(value):
     return Markup(escaped)
 
 
-def create_app(test_config=None):
-    app = Flask(__name__, instance_relative_config=True)
+def create_app(test_config=None, initialize_database=True):
+    instance_path = None
+    if os.environ.get("VERCEL"):
+        instance_path = os.path.join(tempfile.gettempdir(), "simulador-pmp")
+    app = Flask(
+        __name__,
+        instance_relative_config=True,
+        instance_path=instance_path,
+    )
     os.makedirs(app.instance_path, exist_ok=True)
     app.config.from_mapping(
         SECRET_KEY=persistent_secret(app.instance_path),
@@ -176,8 +185,20 @@ def create_app(test_config=None):
     def rich_option_filter(value):
         return render_rich_option(value)
 
-    with app.app_context():
-        init_db()
+    if initialize_database:
+        with app.app_context():
+            init_db()
+    else:
+        database_initialization_lock = threading.Lock()
+
+        @app.before_request
+        def initialize_database_on_first_request():
+            if app.extensions.get("simulator_database_initialized"):
+                return
+            with database_initialization_lock:
+                if not app.extensions.get("simulator_database_initialized"):
+                    init_db()
+                    app.extensions["simulator_database_initialized"] = True
 
     @app.cli.command("init-db")
     def init_db_command():
@@ -187,6 +208,7 @@ def create_app(test_config=None):
     @app.cli.command("create-owner")
     def create_owner_command():
         """Crea la cuenta inicial Owner mediante preguntas interactivas."""
+        init_db()
         db = get_db()
         existing_owner = db.execute(
             "SELECT 1 FROM super_users WHERE role = 'Owner'"
@@ -2341,6 +2363,9 @@ def finalize_exam(db, exam, expired=False):
 
 def g_user_id():
     return session.get("user_id")
+
+
+app = create_app(initialize_database=False)
 
 
 if __name__ == "__main__":

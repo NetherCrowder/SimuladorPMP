@@ -12,6 +12,7 @@ from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from psycopg2.extensions import parse_dsn
 from app import (
+    app as vercel_app,
     create_app,
     create_superuser_account,
     exam_response_is_correct,
@@ -35,6 +36,22 @@ from werkzeug.security import check_password_hash
 
 
 class DatabaseConfigurationTestCase(unittest.TestCase):
+    def test_vercel_entrypoint_is_a_flask_application(self):
+        self.assertIsInstance(vercel_app, Flask)
+
+    @patch("app.init_db")
+    def test_serverless_app_initializes_database_on_first_request(self, init_db):
+        app = create_app(
+            {"SECRET_KEY": "test-secret", "TESTING": True},
+            initialize_database=False,
+        )
+        client = app.test_client()
+
+        init_db.assert_not_called()
+        self.assertEqual(client.get("/not-found").status_code, 404)
+        self.assertEqual(client.get("/not-found").status_code, 404)
+        init_db.assert_called_once_with()
+
     def test_phone_numbers_require_international_country_code(self):
         self.assertEqual(
             normalize_phone_number("+57 (300) 123-4567", required=True),
