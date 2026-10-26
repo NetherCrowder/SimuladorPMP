@@ -15,7 +15,7 @@ El archivo `render.yaml` configura el servicio web gratuito en Render. Para desp
 
 El servicio gratuito de Render puede entrar en reposo y tardar en responder al primer acceso. En Render y Vercel, el sistema de archivos de la aplicación no es persistente: las imágenes cargadas en `static/uploads/questions` pueden perderse al reiniciar o volver a desplegar. Para conservarlas, usa almacenamiento externo de objetos. Los planes y límites gratuitos dependen de cada proveedor.
 
-Si despliegas en Vercel, configura `DATABASE_URL` y `SIMULADOR_SECRET_KEY` en **Project Settings → Environment Variables**. Vercel reconoce la instancia Flask `app` exportada por `app.py`; la base se inicializa en la primera solicitud. Para crear la cuenta Owner, ejecuta `python -m flask --app app create-owner` desde un entorno local configurado con la misma `DATABASE_URL`.
+Si despliegas en Vercel, configura `DATABASE_URL` (o `POSTGRES_URL`, con el valor de conexión de Neon) y `SIMULADOR_SECRET_KEY` en **Project Settings → Environment Variables** para el entorno **Production**; después, vuelve a desplegar. Vercel reconoce la instancia Flask `app` exportada por `app.py`; la base se inicializa en la primera solicitud. Para crear la cuenta Owner, ejecuta `python -m flask --app app create-owner` desde un entorno local configurado con la misma URL de PostgreSQL.
 
 `DATABASE_URL` es opcional; si no está definida, la aplicación conserva la configuración local mediante `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` y `DB_PORT`.
 

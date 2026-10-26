@@ -9,9 +9,28 @@ from psycopg2.extras import RealDictCursor, register_uuid
 
 def database_config_from_env():
     """Lee los parámetros de PostgreSQL de variables de entorno."""
-    database_url = os.environ.get("DATABASE_URL")
+    database_url = (
+        os.environ.get("DATABASE_URL")
+        or os.environ.get("POSTGRES_URL")
+        or os.environ.get("POSTGRES_URL_NON_POOLING")
+    )
     if database_url:
         return {"url": database_url}
+
+    if os.environ.get("VERCEL"):
+        required_env = (
+            "DB_HOST",
+            "DB_NAME",
+            "DB_USER",
+            "DB_PASSWORD",
+            "DB_PORT",
+        )
+        missing = [name for name in required_env if not os.environ.get(name)]
+        if missing:
+            raise RuntimeError(
+                "Falta la configuración de PostgreSQL en Vercel. Define "
+                "DATABASE_URL o POSTGRES_URL con la URL de Neon."
+            )
 
     return {
         "host": os.environ.get("DB_HOST", "localhost"),

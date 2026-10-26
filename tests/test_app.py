@@ -95,6 +95,21 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
 
         self.assertEqual(config, {"url": "deployment-url"})
 
+    def test_database_config_accepts_vercel_postgres_url(self):
+        with patch.dict(
+            os.environ,
+            {"POSTGRES_URL": "postgresql://deployment"},
+            clear=True,
+        ):
+            config = database_config_from_env()
+
+        self.assertEqual(config, {"url": "postgresql://deployment"})
+
+    def test_vercel_requires_database_environment_configuration(self):
+        with patch.dict(os.environ, {"VERCEL": "1"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "DATABASE_URL o POSTGRES_URL"):
+                database_config_from_env()
+
     def test_password_is_required_for_database_connection(self):
         with self.assertRaisesRegex(RuntimeError, "DB_PASSWORD"):
             connect_database(
