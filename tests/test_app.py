@@ -32,6 +32,7 @@ from app import (
     practice_consistency,
 )
 from conexion import connect_database, database_config_from_env
+from scripts.create_owner_secure import validate_database_url
 from werkzeug.security import check_password_hash
 
 
@@ -109,6 +110,26 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
         with patch.dict(os.environ, {"VERCEL": "1"}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "DATABASE_URL o POSTGRES_URL"):
                 database_config_from_env()
+
+    def test_owner_setup_url_requires_remote_host_and_tls(self):
+        settings = validate_database_url(
+            "postgresql://owner:secret@ep-example.neon.tech/pmp?sslmode=require"
+        )
+
+        self.assertEqual(settings["host"], "ep-example.neon.tech")
+        self.assertEqual(settings["sslmode"], "require")
+
+    def test_owner_setup_rejects_database_url_without_tls(self):
+        with self.assertRaisesRegex(ValueError, "exigir TLS"):
+            validate_database_url(
+                "postgresql://owner:secret@ep-example.neon.tech/pmp"
+            )
+
+    def test_owner_setup_rejects_local_database_url(self):
+        with self.assertRaisesRegex(ValueError, "URL remota de Neon"):
+            validate_database_url(
+                "postgresql://owner:secret@localhost/pmp?sslmode=require"
+            )
 
     def test_password_is_required_for_database_connection(self):
         with self.assertRaisesRegex(RuntimeError, "DB_PASSWORD"):

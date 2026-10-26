@@ -15,7 +15,7 @@ El archivo `render.yaml` configura el servicio web gratuito en Render. Para desp
 
 El servicio gratuito de Render puede entrar en reposo y tardar en responder al primer acceso. En Render y Vercel, el sistema de archivos de la aplicación no es persistente: las imágenes cargadas en `static/uploads/questions` pueden perderse al reiniciar o volver a desplegar. Para conservarlas, usa almacenamiento externo de objetos. Los planes y límites gratuitos dependen de cada proveedor.
 
-Si despliegas en Vercel, configura `DATABASE_URL` (o `POSTGRES_URL`, con el valor de conexión de Neon) y `SIMULADOR_SECRET_KEY` en **Project Settings → Environment Variables** para el entorno **Production**; después, vuelve a desplegar. Vercel reconoce la instancia Flask `app` exportada por `app.py`; la base se inicializa en la primera solicitud. Para crear la cuenta Owner, ejecuta `python -m flask --app app create-owner` desde un entorno local configurado con la misma URL de PostgreSQL.
+Si despliegas en Vercel, configura `DATABASE_URL` (o `POSTGRES_URL`, con el valor de conexión de Neon) y `SIMULADOR_SECRET_KEY` en **Project Settings → Environment Variables** para el entorno **Production**; después, vuelve a desplegar. Vercel reconoce la instancia Flask `app` exportada por `app.py`; la base se inicializa en la primera solicitud. Para crear la cuenta Owner desde tu equipo, sigue la sección **Crear Owner de forma segura desde el entorno local**.
 
 `DATABASE_URL` es opcional; si no está definida, la aplicación conserva la configuración local mediante `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` y `DB_PORT`.
 
@@ -58,6 +58,138 @@ python -m flask --app app create-owner
 ```
 
 La contraseña se oculta mientras se escribe. No hay credenciales Owner predeterminadas. El Owner y los Administradores acceden al panel desde **Administración**. Ambos pueden consultar y activar/desactivar usuarios, crear/editar preguntas manuales y automáticas y aprobar/rechazar las automáticas. Solo el Owner puede crear, desactivar o eliminar Administradores.
+
+### Alternativa: crear el Owner con SQL
+
+Ejecuta este método en la misma base PostgreSQL, después de inicializar el esquema. Primero genera un hash compatible con Werkzeug usando Python; el comando solicita la contraseña sin mostrarla ni guardarla en el historial:
+
+```powershell
+python -c "from getpass import getpass; from werkzeug.security import generate_password_hash; print(generate_password_hash(getpass('Contraseña del Owner: ')))"
+```
+
+Copia el hash resultante y reemplaza los valores de ejemplo del siguiente SQL. No pegues la contraseña en texto plano en la base de datos. El índice de la base permite un solo Owner; si ya existe uno, la inserción fallará y no debes volver a ejecutar el bloque sin revisar las cuentas existentes.
+
+```sql
+BEGIN;
+
+WITH new_owner AS (
+    INSERT INTO users (
+        username, email, password_hash, created_at, account_role,
+        first_name, second_name, first_surname, second_surname,
+        document_id, primary_phone, secondary_phone
+    )
+    VALUES (
+        'owner_usuario',
+        'owner@ejemplo.com',
+        'PEGA_AQUI_EL_HASH_GENERADO',
+        EXTRACT(EPOCH FROM clock_timestamp()),
+        'owner',
+        'Nombre',
+        NULL,
+        'Apellido',
+        NULL,
+        NULL,
+        '+573001234567',
+        NULL
+    )
+    RETURNING id, email, created_at
+),
+new_profile AS (
+    INSERT INTO user_profiles (user_id, registration_date, email)
+    SELECT id, created_at, email
+    FROM new_owner
+    RETURNING user_id
+)
+INSERT INTO super_users (user_id, role, status)
+SELECT user_id, 'Owner', 'active'
+FROM new_profile
+RETURNING user_id;
+
+COMMIT;
+```
+
+Usa un nombre de usuario y correo únicos, un teléfono internacional válido y un hash generado para la contraseña elegida. Conserva el `user_id` devuelto si necesitas verificar la cuenta.
+
+### Crear Owner de forma segura desde el entorno local
+
+El script `scripts/create_owner_secure.py` conecta tu entorno local directamente a Neon y reutiliza el comando de creación del Owner de la aplicación. Desde la raíz del repositorio:
+
+```powershell
+python .\scripts\create_owner_secure.py
+```
+
+Si existe `DATABASE_URL`, `POSTGRES_URL` o `POSTGRES_URL_NON_POOLING` en el entorno local, el script la utiliza en ese orden. Si no hay ninguna definida, solicita la URL de Neon con entrada oculta. La URL debe incluir `sslmode=require` (o un modo de verificación TLS más estricto). El script muestra solo el host y el nombre de la base, pide confirmación explícita, comprueba la conexión y entonces inicia el asistente de Owner. La contraseña del Owner también se solicita de forma oculta y se almacena como hash.
+
+No escribas la URL ni la contraseña en el código, en argumentos de comandos o en archivos versionados. En Neon, utiliza una credencial con permisos para inicializar el esquema y crear cuentas. Si falla la conexión, revisa que la URL corresponda al proyecto/base correctos y que el equipo tenga acceso de red.
+
+## Cargar preguntas mediante SQL
+
+El esquema y los catálogos deben estar inicializados antes de insertar preguntas. El ejemplo siguiente agrega **una pregunta manual de opción múltiple**; reemplaza todos los textos de ejemplo. `correct_option` usa índice desde cero (`0` para A, `1` para B, etc.); `correct_answer_json` guarda ese índice como JSON y `correct_answer` en el banco guarda la letra. Cambia las tres etiquetas de clasificación por IDs existentes: dominios de desempeño (`governance`, `scope`, `schedule`, `finance`, `stakeholders`, `resources`, `risk`), metodología (`predictive`, `agile_hybrid`) y dominio ECO (`people`, `processes`, `business_environment`).
+
+```sql
+BEGIN;
+
+WITH new_question AS (
+    INSERT INTO questions (
+        prompt, options_json, option_feedback_json, correct_option,
+        question_type, content_json, correct_answer_json, explanation,
+        source_type, active, created_at
+    )
+    VALUES (
+        'Escribe aquí el enunciado de la pregunta.',
+        '["Opción A","Opción B","Opción C","Opción D"]',
+        '["Explicación","Explicación","Explicación","Explicación"]',
+        2,
+        'multiple_choice',
+        '{}',
+        '2',
+        'Explica por qué la opción C es la mejor respuesta.',
+        'general',
+        1,
+        EXTRACT(EPOCH FROM clock_timestamp())
+    )
+    RETURNING id
+),
+performance_tag AS (
+    INSERT INTO question_performance_domains (question_id, domain_id)
+    SELECT id, 'risk' FROM new_question
+    RETURNING question_id
+),
+methodology_tag AS (
+    INSERT INTO question_methodologies (question_id, methodology_id)
+    SELECT id, 'predictive' FROM new_question
+    RETURNING question_id
+),
+eco_tag AS (
+    INSERT INTO question_eco_domains (question_id, eco_domain_id)
+    SELECT id, 'people' FROM new_question
+    RETURNING question_id
+),
+manual_bank_entry AS (
+    INSERT INTO manual_question_bank (
+        question_id, stem, options, correct_answer, category_type,
+        category_value, interaction_config, feedback, added_at, status
+    )
+    SELECT
+        id,
+        'Escribe aquí el enunciado de la pregunta.',
+        '{"A":"Opción A","B":"Opción B","C":"Opción C","D":"Opción D"}'::jsonb,
+        'C',
+        'performance_domain',
+        'risk',
+        '{"max_Selections":1,"options":{"A":"Opción A","B":"Opción B","C":"Opción C","D":"Opción D"},"correct_answers":["C"]}'::jsonb,
+        'Explica por qué la opción C es la mejor respuesta.',
+        EXTRACT(EPOCH FROM clock_timestamp()),
+        TRUE
+    FROM new_question
+    RETURNING question_id
+)
+SELECT question_id FROM manual_bank_entry;
+
+COMMIT;
+```
+
+Mantén sincronizados el enunciado, las opciones, la respuesta correcta y la explicación en ambas partes del bloque. En `category_value` debe ir el mismo ID que el dominio de desempeño insertado arriba. Los otros seis formatos (`case_set`, `visual_based`, `multiple_responses`, `drag_drop`, `hotspot` y `pull_down`) requieren estructuras JSON específicas en `content_json`, `correct_answer_json` e `interaction_config`; para ellos se recomienda usar el formulario de administración, que valida esos formatos y guarda los datos relacionados.
 
 Las pruebas de integración usan PostgreSQL. Define `TEST_DATABASE_URL` para una base de pruebas dedicada; cada caso crea y elimina su propio esquema dentro de esa base:
 
