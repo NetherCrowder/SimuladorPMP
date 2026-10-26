@@ -2,6 +2,21 @@
 
 Prototipo de práctica de exámenes con Python, Flask y PostgreSQL. La aplicación requiere una conexión a PostgreSQL; no crea ni usa una base de datos local.
 
+## Despliegue en internet
+
+Esta aplicación necesita ejecutar Python/Flask y conectarse a PostgreSQL. **GitHub Pages, Netlify y otros alojamientos estáticos no pueden ejecutar el simulador**; si GitHub Pages muestra este README, está publicando la documentación del repositorio, no la aplicación Flask.
+
+El archivo `render.yaml` configura el servicio web gratuito en Render. Para desplegarlo:
+
+1. Crea una base PostgreSQL gratuita en un proveedor compatible, como Neon, y copia su URL de conexión. Usa la URL que requiere SSL (normalmente contiene `sslmode=require`).
+2. En Render, crea un **Blueprint** desde este repositorio y configura `DATABASE_URL` con la URL copiada. El Blueprint genera `SIMULADOR_SECRET_KEY` automáticamente.
+3. Al terminar el primer despliegue, crea la cuenta Owner desde la consola de Render con `python -m flask --app app create-owner`.
+4. Abre la URL del servicio Render para usar el simulador. Al iniciar, la aplicación crea las tablas en la base configurada.
+
+El servicio gratuito puede entrar en reposo y tardar en responder al primer acceso. Su sistema de archivos no es persistente: los archivos de preguntas cargados en `static/uploads/questions` pueden perderse al reiniciar o volver a desplegar. Para conservar imágenes cargadas, usa almacenamiento persistente compatible o un plan que lo incluya. Los planes y límites gratuitos dependen de cada proveedor.
+
+`DATABASE_URL` es opcional; si no está definida, la aplicación conserva la configuración local mediante `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` y `DB_PORT`.
+
 ## Crear la base y ejecutar la aplicación
 
 Primero, crea la base de datos en tu servidor PostgreSQL, por ejemplo desde `psql` conectado con un usuario autorizado:

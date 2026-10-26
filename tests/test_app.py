@@ -68,6 +68,16 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
             },
         )
 
+    def test_database_config_prefers_database_url_when_configured(self):
+        with patch.dict(
+            os.environ,
+            {"DATABASE_URL": "deployment-url"},
+            clear=True,
+        ):
+            config = database_config_from_env()
+
+        self.assertEqual(config, {"url": "deployment-url"})
+
     def test_password_is_required_for_database_connection(self):
         with self.assertRaisesRegex(RuntimeError, "DB_PASSWORD"):
             connect_database(
@@ -124,6 +134,22 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
             user="owner",
             password="secret",
             port=5433,
+            cursor_factory=RealDictCursor,
+        )
+        self.assertIs(db._connection, connection)
+        register_uuid.assert_called_once_with(conn_or_curs=connection)
+
+    @patch("conexion.register_uuid")
+    @patch("conexion.psycopg2.connect")
+    def test_connection_uses_database_url(self, connect, register_uuid):
+        connection = Mock()
+        connect.return_value = connection
+        database_url = "postgresql://owner:secret@db.example.test/pmp?sslmode=require"
+
+        db = connect_database({"url": database_url})
+
+        connect.assert_called_once_with(
+            database_url,
             cursor_factory=RealDictCursor,
         )
         self.assertIs(db._connection, connection)

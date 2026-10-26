@@ -9,6 +9,10 @@ from psycopg2.extras import RealDictCursor, register_uuid
 
 def database_config_from_env():
     """Lee los parámetros de PostgreSQL de variables de entorno."""
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        return {"url": database_url}
+
     return {
         "host": os.environ.get("DB_HOST", "localhost"),
         "database": os.environ.get("DB_NAME", "SimuladorPMP"),
@@ -41,6 +45,14 @@ class DatabaseConnection:
 def connect_database(config=None):
     """Conecta a la base PostgreSQL indicada por host, nombre, usuario y puerto."""
     settings = config or database_config_from_env()
+    if settings.get("url"):
+        connection = psycopg2.connect(
+            settings["url"],
+            cursor_factory=RealDictCursor,
+        )
+        register_uuid(conn_or_curs=connection)
+        return DatabaseConnection(connection)
+
     required = ("host", "database", "user", "password", "port")
     missing = [name for name in required if not settings.get(name)]
     if missing:
