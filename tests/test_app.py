@@ -111,6 +111,11 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "DATABASE_URL o POSTGRES_URL"):
                 database_config_from_env()
 
+    def test_vercel_requires_a_persistent_session_secret(self):
+        with patch.dict(os.environ, {"VERCEL": "1"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "SIMULADOR_SECRET_KEY"):
+                create_app(initialize_database=False)
+
     def test_owner_setup_url_requires_remote_host_and_tls(self):
         settings = validate_database_url(
             "postgresql://owner:secret@ep-example.neon.tech/pmp?sslmode=require"

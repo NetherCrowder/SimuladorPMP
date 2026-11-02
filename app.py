@@ -115,6 +115,11 @@ def persistent_secret(instance_path):
     environment_secret = os.environ.get("SIMULADOR_SECRET_KEY")
     if environment_secret:
         return environment_secret
+    if os.environ.get("VERCEL"):
+        raise RuntimeError(
+            "SIMULADOR_SECRET_KEY debe configurarse en Vercel para mantener "
+            "las sesiones entre instancias."
+        )
     secret_path = os.path.join(instance_path, ".secret_key")
     try:
         with open(secret_path, encoding="ascii") as secret_file:
