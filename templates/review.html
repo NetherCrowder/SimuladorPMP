@@ -14,11 +14,18 @@
       {% for question in questions %}
         <article class="panel review-card">
           <p class="eyebrow">Pregunta {{ question.position }} ·
-            {% if question.result == "correct" %}Buena{% elif question.result == "incorrect" %}Mala{% else %}Guardada{% endif %}
+            {% if question.result == "correct" %}Buena
+            {% elif question.result == "incorrect" %}Mala
+            {% elif question.result == "invalid" %}Error en la clave
+            {% else %}Guardada{% endif %}
           </p>
           <h2>{{ question.review_prompt }}</h2>
           {% if question.result == "pending" %}
             <p><strong>Sin respuesta registrada.</strong> Esta pregunta quedó guardada como pendiente.</p>
+          {% elif question.result == "invalid" %}
+            <p><strong>Revisión no disponible:</strong> la clave de respuesta
+              almacenada no coincide con las opciones. Se debe corregir esta pregunta.</p>
+            <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
           {% else %}
             <p><strong>Tipo:</strong> {{ question_types[question.question_type][0] }}</p>
             {% if question.question_type in ["visual_based", "hotspot"] %}

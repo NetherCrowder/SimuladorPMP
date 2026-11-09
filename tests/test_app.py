@@ -31,6 +31,7 @@ from app import (
     count_matching_questions,
     OFFICIAL_EXAM_DISTRIBUTIONS,
     practice_consistency,
+    valid_single_choice_answer,
 )
 from conexion import connect_database, database_config_from_env
 from scripts.create_owner_secure import validate_database_url
@@ -252,6 +253,16 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
 
 
 class QuestionTypeResponseTestCase(unittest.TestCase):
+    def test_single_choice_answer_index_must_match_available_options(self):
+        options = ["A", "B", "C", "D"]
+
+        self.assertTrue(valid_single_choice_answer("multiple_choice", 3, options))
+        self.assertFalse(valid_single_choice_answer("multiple_choice", 4, options))
+        self.assertFalse(valid_single_choice_answer("visual_based", -1, options))
+        self.assertTrue(
+            valid_single_choice_answer("multiple_responses", [0, 3], options)
+        )
+
     def test_pull_down_review_prompt_formats_answered_and_pending_blanks(self):
         prompt_parts = ["Enfoque ", " y luego ", "."]
         options = ["Ágil", "Predictivo"]

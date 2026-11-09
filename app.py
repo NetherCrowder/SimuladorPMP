@@ -801,8 +801,19 @@ def create_app(test_config=None, initialize_database=True):
                 item["review_prompt"] = format_pull_down_review_prompt(
                     item["content"]["prompt_parts"], item["options"], response
                 )
+            invalid_correct_answer = not valid_single_choice_answer(
+                item["question_type"], item["correct_answer"], item["options"]
+            )
+            if invalid_correct_answer:
+                current_app.logger.error(
+                    "Invalid correct answer index for question %s: %r",
+                    item["id"],
+                    item["correct_answer"],
+                )
             if response is None or item["marked_saved"]:
                 item["result"] = "pending"
+            elif invalid_correct_answer:
+                item["result"] = "invalid"
             elif exam_response_is_correct(
                 {**item, "response_json": json.dumps(response)}
             ):
@@ -812,14 +823,22 @@ def create_app(test_config=None, initialize_database=True):
             item["user_answer_display"] = format_exam_answer(
                 item["question_type"], item["options"], item["content"], response
             )
-            item["correct_answer_display"] = format_exam_answer(
-                item["question_type"],
-                item["options"],
-                item["content"],
-                item["correct_answer"],
-                correct=True,
+            item["correct_answer_display"] = (
+                "Clave inválida: el índice no corresponde con las opciones."
+                if invalid_correct_answer
+                else format_exam_answer(
+                    item["question_type"],
+                    item["options"],
+                    item["content"],
+                    item["correct_answer"],
+                    correct=True,
+                )
             )
-            if kind == "both" and item["result"] in {"correct", "incorrect"}:
+            if kind == "both" and item["result"] in {
+                "correct",
+                "incorrect",
+                "invalid",
+            }:
                 reviewed.append(item)
             elif kind == item["result"]:
                 reviewed.append(item)
@@ -1997,6 +2016,12 @@ def exam_response_is_correct(row):
     if question_type == "multiple_responses":
         return sorted(response) == sorted(correct)
     return response == correct
+
+
+def valid_single_choice_answer(question_type, answer, options):
+    return question_type not in {"multiple_choice", "visual_based"} or (
+        type(answer) is int and 0 <= answer < len(options)
+    )
 
 
 def format_pull_down_review_prompt(prompt_parts, options, response):
