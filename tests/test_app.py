@@ -16,6 +16,7 @@ from app import (
     create_app,
     create_superuser_account,
     exam_response_is_correct,
+    format_pull_down_review_prompt,
     get_db,
     init_db,
     matching_questions,
@@ -251,6 +252,19 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
 
 
 class QuestionTypeResponseTestCase(unittest.TestCase):
+    def test_pull_down_review_prompt_formats_answered_and_pending_blanks(self):
+        prompt_parts = ["Enfoque ", " y luego ", "."]
+        options = ["Ágil", "Predictivo"]
+
+        self.assertEqual(
+            format_pull_down_review_prompt(prompt_parts, options, [0, 1]),
+            "Enfoque Ágil y luego Predictivo.",
+        )
+        self.assertEqual(
+            format_pull_down_review_prompt(prompt_parts, options, None),
+            "Enfoque ________ y luego ________.",
+        )
+
     def test_question_json_formats_match_their_interaction_contracts(self):
         cases = question_interaction_config(
             "case_set",

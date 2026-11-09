@@ -798,12 +798,8 @@ def create_app(test_config=None, initialize_database=True):
             )
             item["review_prompt"] = item["prompt"]
             if item["question_type"] == "pull_down":
-                blanks = response if response is not None else ["________"] * (
-                    len(item["content"]["prompt_parts"]) - 1
-                )
-                item["review_prompt"] = "".join(
-                    part + (item["options"][blanks[index]] if index < len(blanks) else "")
-                    for index, part in enumerate(item["content"]["prompt_parts"])
+                item["review_prompt"] = format_pull_down_review_prompt(
+                    item["content"]["prompt_parts"], item["options"], response
                 )
             if response is None or item["marked_saved"]:
                 item["result"] = "pending"
@@ -2001,6 +1997,21 @@ def exam_response_is_correct(row):
     if question_type == "multiple_responses":
         return sorted(response) == sorted(correct)
     return response == correct
+
+
+def format_pull_down_review_prompt(prompt_parts, options, response):
+    rendered = []
+    for index, part in enumerate(prompt_parts[:-1]):
+        option_index = (
+            response[index]
+            if response is not None and index < len(response)
+            else None
+        )
+        rendered.append(part)
+        rendered.append(options[option_index] if option_index is not None else "________")
+    if prompt_parts:
+        rendered.append(prompt_parts[-1])
+    return "".join(rendered)
 
 
 def format_exam_answer(question_type, options, content, response, correct=False):
