@@ -3,24 +3,45 @@
 {% block content %}
   <p class="eyebrow">Banco personal</p>
   <h1>Mis preguntas</h1>
+  {% if selected_route != "all" %}
+    <p class="muted">
+      {{ practice_routes[selected_route].label }}
+      {% if selected_category %} · {{ practice_routes[selected_route].categories[selected_category] }}{% endif %}
+    </p>
+  {% endif %}
   <nav class="filter-tabs" aria-label="Filtrar banco personal">
-    <a class="{% if selected_kind == 'all' %}active{% endif %}" href="{{ url_for('personal_bank', kind='all') }}">Todas</a>
-    <a class="{% if selected_kind == 'used' %}active{% endif %}" href="{{ url_for('personal_bank', kind='used') }}">Respondidas</a>
-    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('personal_bank', kind='pending') }}">Pendientes</a>
-    <a class="{% if selected_kind == 'favorites' %}active{% endif %}" href="{{ url_for('personal_bank', kind='favorites') }}">Favoritas</a>
+    <a class="{% if selected_kind == 'all' %}active{% endif %}" href="{{ url_for('personal_bank', kind='all', route=selected_route, category=selected_category or none) }}">Todas</a>
+    <a class="{% if selected_kind == 'used' %}active{% endif %}" href="{{ url_for('personal_bank', kind='used', route=selected_route, category=selected_category or none) }}">Respondidas</a>
+    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('personal_bank', kind='pending', route=selected_route, category=selected_category or none) }}">Preguntas para revisar</a>
+    <a class="{% if selected_kind == 'favorites' %}active{% endif %}" href="{{ url_for('personal_bank', kind='favorites', route=selected_route, category=selected_category or none) }}">Favoritas</a>
   </nav>
   {% if questions %}
     <div class="review-list">
       {% for question in questions %}
         <article class="panel review-card">
           <div class="section-heading">
-            <p class="eyebrow">{{ "Automatizada" if question.source_type == "automated" else "Banco general" }} · {{ question.seen_count }} usos{% if question.pending %} · Pendiente{% endif %}</p>
+            <p class="eyebrow">{{ "Automatizada" if question.source_type == "automated" else "Banco general" }} · {{ question.seen_count }} usos{% if question.pending %} · Para revisar{% endif %}{% if question.route_category and selected_route != "all" %} · {{ practice_routes[selected_route].categories[question.route_category] }}{% endif %}</p>
             <form method="post" action="{{ url_for('toggle_favorite', question_id=question.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="link-button" type="submit" aria-label="Quitar de favoritas si está marcada">{{ "★ Favorita" if question.favorite else "☆ Marcar favorita" }}</button>
             </form>
           </div>
           <h2>{{ question.prompt }}</h2>
+          {% if question.review_options and selected_kind != "pending" %}
+            <ul class="review-options" aria-label="Opciones de respuesta">
+              {% for option in question.review_options %}
+                <li class="review-option {% if option.correct is none %}invalid{% elif option.correct %}correct{% else %}incorrect{% endif %}">
+                  <span><strong>{{ option.letter }}.</strong> {{ option.text|rich_option }}</span>
+                  <span class="review-option-status">
+                    {% if option.correct is none %}Clave no disponible
+                    {% elif option.correct %}Correcta
+                    {% else %}Incorrecta{% endif %}
+                  </span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          <p class="explanation"><strong>Justificación:</strong> {{ question.explanation }}</p>
         </article>
       {% endfor %}
     </div>

@@ -207,12 +207,20 @@ fieldset legend { padding: 0 .4rem; font-size: 1.05rem; font-weight: 750; }
 .question-status-legend i.answered { border-color: #a8d7b9; background: #eaf7ef; }
 .question-status-legend i.saved { border-color: #efd28b; background: #fff5dd; }
 .finish-form { margin-top: 1rem; }
+.question-panel .actions { flex-wrap: wrap; }
 
 .filter-tabs { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.5rem 0; }
 .filter-tabs a { padding: .5rem .8rem; border: 1px solid var(--border); border-radius: 2rem; background: white; text-decoration: none; }
 .filter-tabs a.active { border-color: var(--blue); background: #eaf4fc; color: var(--blue-dark); font-weight: 700; }
+.route-questions-link { display: inline-block; margin-top: .75rem; }
 .review-list { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
 .review-card h2 { margin-bottom: 1rem; }
+.review-options { display: grid; gap: .5rem; margin: 1rem 0; padding: 0; list-style: none; }
+.review-option { display: flex; justify-content: space-between; gap: 1rem; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+.review-option.correct { border-color: #a8d7b9; background: #eaf7ef; }
+.review-option.incorrect { border-color: #e5b7ba; background: #fff3f3; }
+.review-option.invalid { border-color: var(--border); background: var(--background); }
+.review-option-status { flex: 0 0 auto; color: var(--muted); font-size: .9rem; }
 .explanation { padding: .9rem; border-left: 4px solid var(--blue); background: #f2f7fb; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
@@ -254,6 +262,9 @@ body.exam-page .question-number.current { outline-color: #60a5fa; }
 body.exam-page .question-status-legend i { border-color: #475569; background: #172338; }
 body.exam-page .question-status-legend i.answered { border-color: #166534; background: #123327; }
 body.exam-page .question-status-legend i.saved { border-color: #854d0e; background: #3b2b11; }
+@media (max-width: 600px) {
+  .review-option { flex-direction: column; gap: .25rem; }
+}
 body.exam-page .site-footer { color: #94a3b8; }
 
 @media (max-width: 760px) {

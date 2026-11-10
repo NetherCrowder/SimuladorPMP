@@ -10,7 +10,7 @@
   </div>
   <section class="stat-grid" aria-label="Resumen de tu banco">
     <div class="stat-card"><strong>{{ stats.total or 0 }}</strong><span>Preguntas en tu banco</span></div>
-    <div class="stat-card"><strong>{{ stats.pending or 0 }}</strong><span>Pendientes</span></div>
+    <div class="stat-card"><strong>{{ stats.pending or 0 }}</strong><span>Preguntas para revisar</span></div>
     <div class="stat-card"><strong>{{ stats.favorites or 0 }}</strong><span>Favoritas</span></div>
   </section>
   <section class="panel">
@@ -34,6 +34,10 @@
               <span style="width: {{ metric.consistency }}%"></span>
             </div>
           {% endif %}
+          <a class="btn btn-link route-questions-link"
+             href="{{ url_for('personal_bank', route=metric.route_id, category=metric.category_id) }}">
+            Ver preguntas de {{ metric.label }}
+          </a>
         </div>
       {% endfor %}
     </div>
@@ -41,7 +45,6 @@
   <section class="panel">
     <div class="section-heading">
       <h2>Pruebas recientes</h2>
-      <a href="{{ url_for('personal_bank') }}">Ver mi banco</a>
     </div>
     {% if recent_exams %}
       <ul class="exam-list">

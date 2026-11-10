@@ -17,6 +17,7 @@ from app import (
     create_superuser_account,
     exam_response_is_correct,
     format_pull_down_review_prompt,
+    has_exam_response,
     get_db,
     init_db,
     matching_questions,
@@ -30,7 +31,9 @@ from app import (
     validate_filters,
     count_matching_questions,
     OFFICIAL_EXAM_DISTRIBUTIONS,
+    PRACTICE_ROUTES,
     practice_consistency,
+    build_review_options,
     valid_single_choice_answer,
 )
 from conexion import connect_database, database_config_from_env
@@ -253,6 +256,52 @@ class DatabaseConfigurationTestCase(unittest.TestCase):
 
 
 class QuestionTypeResponseTestCase(unittest.TestCase):
+    def test_exam_response_detection_allows_skipping_empty_questions(self):
+        app = Flask(__name__)
+        question = {"question_type": "multiple_choice"}
+        with app.test_request_context("/", method="POST", data={}):
+            self.assertFalse(has_exam_response(question))
+        with app.test_request_context(
+            "/", method="POST", data={"selected_option": "0"}
+        ):
+            self.assertTrue(has_exam_response(question))
+
+        question = {"question_type": "case_set"}
+        with app.test_request_context(
+            "/", method="POST", data={"case_answers": ["", ""]}
+        ):
+            self.assertFalse(has_exam_response(question))
+        with app.test_request_context(
+            "/", method="POST", data={"case_answers": ["1", ""]}
+        ):
+            self.assertTrue(has_exam_response(question))
+
+    def test_review_options_show_correct_key_and_selected_response(self):
+        options = build_review_options(
+            ["Primera", "Segunda", "Tercera", "Cuarta"], 2, 1
+        )
+
+        self.assertEqual(
+            [
+                (option["letter"], option["correct"], option["selected"])
+                for option in options
+            ],
+            [
+                ("A", False, False),
+                ("B", False, True),
+                ("C", True, False),
+                ("D", False, False),
+            ],
+        )
+        self.assertEqual(
+            [route["label"] for route in PRACTICE_ROUTES.values()],
+            [
+                "Ruta 1 · Dominios de desempeño",
+                "Ruta 2 · Dominios ECO",
+                "Ruta 3 · Enfoques de desarrollo",
+            ],
+        )
+
     def test_single_choice_answer_index_must_match_available_options(self):
         options = ["A", "B", "C", "D"]
 
@@ -1376,7 +1425,7 @@ class SimulatorTestCase(unittest.TestCase):
         response = self.client.get(f"/exams/{exam_id}/results")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Buenas", response.data)
-        self.assertIn(b"Guardadas", response.data)
+        self.assertIn(b"Preguntas para revisar", response.data)
         with self.connect() as db:
             status = db.execute(
                 "SELECT status FROM exams WHERE id = %s", (exam_id,)
@@ -1403,6 +1452,9 @@ class SimulatorTestCase(unittest.TestCase):
         correct_review = self.client.get(
             f"/exams/{exam_id}/review?kind=correct"
         )
+        self.assertIn(b"A.", correct_review.data)
+        self.assertIn(b"Correcta", correct_review.data)
+        self.assertIn(b"Tu respuesta", correct_review.data)
         self.assertIn(b"Retroalimentaci", correct_review.data)
         incorrect_review = self.client.get(
             f"/exams/{exam_id}/review?kind=incorrect"
@@ -1418,6 +1470,142 @@ class SimulatorTestCase(unittest.TestCase):
             f"/exams/{exam_id}/review?kind=pending"
         )
         self.assertIn(b"Sin respuesta registrada", pending_review.data)
+        self.assertNotIn(b"Respuesta correcta", pending_review.data)
+        self.assertNotIn(b"Respuesta alternativa", pending_review.data)
+        pending_bank = self.client.get("/bank?kind=pending")
+        self.assertIn(b"Justificaci", pending_bank.data)
+        self.assertIn(b"Preguntas para revisar", pending_bank.data)
+        self.assertNotIn(b"Respuesta alternativa", pending_bank.data)
+
+    def test_exam_navigation_saves_answers_allows_skips_and_finishes_on_last(self):
+        self.register()
+        self.add_questions(30)
+        started = self.client.post(
+            "/practice/start",
+            data={**self.selected_filters(), "length": "30"},
+        )
+        exam_id = int(urlsplit(started.headers["Location"]).path.rsplit("/", 1)[1])
+        with self.connect() as db:
+            question_ids = [
+                row["question_id"]
+                for row in db.execute(
+                    "SELECT question_id FROM exam_questions WHERE exam_id = %s "
+                    "ORDER BY position",
+                    (exam_id,),
+                )
+            ]
+
+        first = self.client.post(
+            f"/exams/{exam_id}/answer",
+            data={
+                "action": "next",
+                "question_id": question_ids[0],
+                "selected_option": "0",
+            },
+        )
+        self.assertTrue(first.headers["Location"].endswith("?question=2"))
+        with self.connect() as db:
+            saved_answer = db.execute(
+                "SELECT response_json FROM exam_answers "
+                "WHERE exam_id = %s AND question_id = %s",
+                (exam_id, question_ids[0]),
+            ).fetchone()
+        self.assertEqual(json.loads(saved_answer["response_json"]), 0)
+
+        previous = self.client.post(
+            f"/exams/{exam_id}/answer",
+            data={"action": "previous", "question_id": question_ids[1]},
+        )
+        self.assertTrue(previous.headers["Location"].endswith("?question=1"))
+        saved = self.client.post(
+            f"/exams/{exam_id}/answer",
+            data={"action": "save", "question_id": question_ids[1]},
+        )
+        self.assertTrue(saved.headers["Location"].endswith("?question=3"))
+        with self.connect() as db:
+            question_saved = db.execute(
+                "SELECT marked_saved FROM exam_questions "
+                "WHERE exam_id = %s AND question_id = %s",
+                (exam_id, question_ids[1]),
+            ).fetchone()
+        self.assertEqual(question_saved["marked_saved"], 1)
+
+        last_page = self.client.get(f"/exams/{exam_id}?question=30")
+        self.assertIn(b"Finalizar la prueba", last_page.data)
+        self.assertNotIn(b"Siguiente pregunta", last_page.data)
+        last_saved = self.client.post(
+            f"/exams/{exam_id}/answer",
+            data={"action": "save", "question_id": question_ids[29]},
+        )
+        self.assertTrue(last_saved.headers["Location"].endswith(f"/exams/{exam_id}/results"))
+        with self.connect() as db:
+            exam = db.execute(
+                "SELECT status FROM exams WHERE id = %s", (exam_id,)
+            ).fetchone()
+        self.assertEqual(exam["status"], "completed")
+
+    def test_personal_bank_filters_questions_by_route(self):
+        dashboard = self.register()
+        for route in PRACTICE_ROUTES.values():
+            self.assertIn(route["label"].encode(), dashboard.data)
+            for label in route["categories"].values():
+                self.assertIn(f"Ver preguntas de {label}".encode(), dashboard.data)
+        self.add_questions(30)
+        started = self.client.post(
+            "/practice/start",
+            data={**self.selected_filters(), "length": "30"},
+        )
+        exam_id = int(urlsplit(started.headers["Location"]).path.rsplit("/", 1)[1])
+        with self.connect() as db:
+            question_id = db.execute(
+                "SELECT question_id FROM exam_questions "
+                "WHERE exam_id = %s ORDER BY position LIMIT 1",
+                (exam_id,),
+            ).fetchone()["question_id"]
+        self.client.post(
+            f"/exams/{exam_id}/answer",
+            data={"action": "finish", "question_id": question_id},
+        )
+
+        with self.connect() as db:
+            user_id = db.execute(
+                "SELECT id FROM users WHERE username = 'student'"
+            ).fetchone()["id"]
+            for route_id, route in PRACTICE_ROUTES.items():
+                expected = db.execute(
+                    f"SELECT COUNT(*) AS count FROM user_question_states s "
+                    f"JOIN {route['table']} category "
+                    "ON category.question_id = s.question_id "
+                    "WHERE s.user_id = %s",
+                    (user_id,),
+                ).fetchone()["count"]
+                response = self.client.get(f"/bank?route={route_id}")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(route["label"].encode(), response.data)
+                self.assertEqual(response.data.count(b"Pregunta ficticia"), expected)
+                for category_id, label in route["categories"].items():
+                    category_expected = db.execute(
+                        f"SELECT COUNT(*) AS count FROM user_question_states s "
+                        f"JOIN {route['table']} category "
+                        "ON category.question_id = s.question_id "
+                        f"WHERE s.user_id = %s AND category.{route['column']} = %s",
+                        (user_id, category_id),
+                    ).fetchone()["count"]
+                    category_response = self.client.get(
+                        f"/bank?route={route_id}&category={category_id}"
+                    )
+                    self.assertEqual(category_response.status_code, 200)
+                    self.assertIn(label.encode(), category_response.data)
+                    self.assertEqual(
+                        category_response.data.count(b"Pregunta ficticia"),
+                        category_expected,
+                    )
+
+        self.assertEqual(self.client.get("/bank?route=invalid").status_code, 400)
+        self.assertEqual(
+            self.client.get("/bank?route=performance&category=people").status_code,
+            400,
+        )
 
     def test_expired_exam_is_finalized_as_expired(self):
         self.register()

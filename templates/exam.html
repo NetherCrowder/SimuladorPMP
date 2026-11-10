@@ -33,7 +33,6 @@
       <form method="post" action="{{ url_for('save_exam_answer', exam_id=exam.id) }}" id="answer-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="question_id" value="{{ current.id }}">
-        <input type="hidden" name="next_position" value="{{ current_position + 1 if current_position < exam.requested_count else current_position }}">
 
         {% if current.question_type == "case_set" %}
           <div class="case-split-layout" data-case-set data-active-question="{{ current.active_subquestion }}">
@@ -164,10 +163,17 @@
           {% endif %}
         {% endif %}
 
-        {% if current.marked_saved %}<p class="message">Esta pregunta está guardada como pendiente. Al responderla dejará de estar pendiente.</p>{% endif %}
+        {% if current.marked_saved %}<p class="message">Esta pregunta está guardada para revisar. Al responderla dejará de estar en esta categoría.</p>{% endif %}
         <div class="actions">
-          <button class="button" type="submit" name="action" value="answer">Guardar respuesta y continuar</button>
-          <button class="button secondary" type="submit" name="action" value="save">Marcar como guardada</button>
+          <button class="button secondary" type="submit" name="action" value="previous"
+                  {% if current_position == 1 %}disabled{% endif %}>Pregunta anterior</button>
+          {% if current_position < exam.requested_count %}
+            <button class="button" type="submit" name="action" value="next">Siguiente pregunta</button>
+          {% else %}
+            <button class="button" type="submit" name="action" value="finish"
+                    data-finish-exam>Finalizar la prueba</button>
+          {% endif %}
+          <button class="button secondary" type="submit" name="action" value="save">Guardar para revisar</button>
         </div>
       </form>
       {% if current.question_type == "visual_based" %}
@@ -200,9 +206,9 @@
         <label>Estado
           <select data-question-status-filter>
             <option value="">Todos</option>
-            <option value="unanswered">Pendientes</option>
+            <option value="unanswered">Sin responder</option>
             <option value="answered">Respondidas</option>
-            <option value="saved">Guardadas</option>
+            <option value="saved">Preguntas para revisar</option>
           </select>
         </label>
       </div>
@@ -212,21 +218,21 @@
           <a class="question-number {% if question.position == current_position %}current{% endif %} {% if question_status == 'saved' %}saved{% elif question_status == 'answered' %}answered{% endif %}"
              data-question-number data-question-type="{{ question.question_type }}" data-question-status="{{ question_status }}"
              href="{{ url_for('take_exam', exam_id=exam.id, question=question.position) }}"
-             aria-label="Pregunta {{ question.position }}, {{ question_types[question.question_type][0] }}{% if question_status == 'saved' %}, guardada{% elif question_status == 'answered' %}, respondida{% else %}, pendiente{% endif %}">
+             aria-label="Pregunta {{ question.position }}, {{ question_types[question.question_type][0] }}{% if question_status == 'saved' %}, para revisar{% elif question_status == 'answered' %}, respondida{% else %}, sin responder{% endif %}">
             {{ question.position }}
           </a>
         {% endfor %}
       </div>
       <p class="muted question-filter-results" data-question-filter-results aria-live="polite"></p>
       <div class="question-status-legend" aria-label="Estados de pregunta">
-        <span><i class="unanswered"></i>Pendiente</span>
+        <span><i class="unanswered"></i>Sin responder</span>
         <span><i class="answered"></i>Respondida</span>
-        <span><i class="saved"></i>Guardada</span>
+        <span><i class="saved"></i>Para revisar</span>
       </div>
-      <form method="post" action="{{ url_for('save_exam_answer', exam_id=exam.id) }}" class="finish-form" onsubmit="return confirm('¿Finalizar la prueba ahora? Las preguntas sin responder quedarán pendientes.');">
+      <form method="post" action="{{ url_for('save_exam_answer', exam_id=exam.id) }}" class="finish-form" onsubmit="return confirm('¿Finalizar la prueba ahora? Las preguntas sin responder quedarán para revisar.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="question_id" value="{{ current.id }}">
-        <button class="button danger" type="submit" name="action" value="finish">Finalizar prueba</button>
+        <button class="button danger" type="submit" name="action" value="finish">Finalizar prueba ahora</button>
       </form>
     </aside>
   </div>

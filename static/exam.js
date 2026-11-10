@@ -1,5 +1,15 @@
 (() => {
   const answerForm = document.getElementById("answer-form");
+  const canNavigateWithPartialAnswer = (submitter) =>
+    ["save", "next", "previous", "finish"].includes(submitter?.value);
+  answerForm?.addEventListener("submit", (event) => {
+    if (
+      event.submitter?.matches("[data-finish-exam]") &&
+      !confirm("¿Finalizar la prueba ahora? Las preguntas sin responder quedarán para revisar.")
+    ) {
+      event.preventDefault();
+    }
+  });
   const caseSet = document.querySelector("[data-case-set]");
   if (answerForm && caseSet) {
     const panels = [...caseSet.querySelectorAll("[data-case-question]")];
@@ -43,7 +53,7 @@
       renderCaseStep();
     });
     answerForm.addEventListener("submit", (event) => {
-      if (event.submitter?.value === "save") return;
+      if (canNavigateWithPartialAnswer(event.submitter)) return;
       if (answers.some((input) => input.value === "")) {
         event.preventDefault();
         error.hidden = false;
@@ -80,7 +90,7 @@
       }
     });
     answerForm.addEventListener("submit", (event) => {
-      if (event.submitter?.value === "save") return;
+      if (canNavigateWithPartialAnswer(event.submitter)) return;
       if (updateStatus() !== limit) {
         event.preventDefault();
         status.textContent = `Seleccione exactamente ${limit} opciones para continuar.`;
@@ -184,7 +194,7 @@
     });
     selects.forEach((select) => select.addEventListener("change", updateAssignments));
     answerForm.addEventListener("submit", (event) => {
-      if (event.submitter?.value === "save") return;
+      if (canNavigateWithPartialAnswer(event.submitter)) return;
       if (selects.some((select) => select.value === "")) {
         event.preventDefault();
         status.textContent = "Asigna cada ficha a una casilla antes de continuar.";

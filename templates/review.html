@@ -7,7 +7,7 @@
     <a class="{% if selected_kind == 'correct' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='correct') }}">Buenas</a>
     <a class="{% if selected_kind == 'incorrect' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='incorrect') }}">Malas</a>
     <a class="{% if selected_kind == 'both' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}">Ambas</a>
-    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='pending') }}">Guardadas</a>
+    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='pending') }}">Preguntas para revisar</a>
   </nav>
   {% if questions %}
     <div class="review-list">
@@ -17,34 +17,52 @@
             {% if question.result == "correct" %}Buena
             {% elif question.result == "incorrect" %}Mala
             {% elif question.result == "invalid" %}Error en la clave
-            {% else %}Guardada{% endif %}
+            {% else %}Para revisar{% endif %}
           </p>
           <h2>{{ question.review_prompt }}</h2>
+          <p><strong>Tipo:</strong> {{ question_types[question.question_type][0] }}</p>
+          {% if question.question_type in ["visual_based", "hotspot"] %}
+            <img class="question-artifact-preview" src="{{ url_for('static', filename=question.content.image_path) }}" alt="Artefacto gráfico de la pregunta">
+          {% endif %}
+          {% if question.review_options and selected_kind != "pending" %}
+            <ul class="review-options" aria-label="Opciones de respuesta">
+              {% for option in question.review_options %}
+                <li class="review-option {% if option.correct is none %}invalid{% elif option.correct %}correct{% else %}incorrect{% endif %}">
+                  <span><strong>{{ option.letter }}.</strong> {{ option.text|rich_option }}</span>
+                  <span class="review-option-status">
+                    {% if option.correct is none %}Clave no disponible
+                    {% elif option.correct %}Correcta
+                    {% else %}Incorrecta{% endif %}
+                    {% if option.selected %} · Tu respuesta{% endif %}
+                  </span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% elif question.question_type == "case_set" %}
+            <div class="case-questions">
+              {% for child in question.content.questions %}
+                <p><strong>{{ loop.index }}. {{ child.prompt }}</strong></p>
+              {% endfor %}
+            </div>
+          {% endif %}
           {% if question.result == "pending" %}
-            <p><strong>Sin respuesta registrada.</strong> Esta pregunta quedó guardada como pendiente.</p>
+            <p><strong>Sin respuesta registrada.</strong> Esta pregunta está en la categoría Preguntas para revisar.</p>
           {% elif question.result == "invalid" %}
             <p><strong>Revisión no disponible:</strong> la clave de respuesta
               almacenada no coincide con las opciones. Se debe corregir esta pregunta.</p>
             <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
           {% else %}
-            <p><strong>Tipo:</strong> {{ question_types[question.question_type][0] }}</p>
-            {% if question.question_type in ["visual_based", "hotspot"] %}
-              <img class="question-artifact-preview" src="{{ url_for('static', filename=question.content.image_path) }}" alt="Artefacto gráfico de la pregunta">
-            {% endif %}
-            <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
-            {% if question.question_type == "case_set" %}
-              <div class="case-questions">
-                {% for child in question.content.questions %}
-                  <p><strong>{{ loop.index }}. {{ child.prompt }}</strong></p>
-                {% endfor %}
-              </div>
+            {% if not question.review_options and selected_kind != "pending" %}
+              <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
             {% endif %}
             <p><strong>Resultado:</strong>
               {% if question.result == "correct" %}Tu respuesta es correcta. {% else %}Tu respuesta es incorrecta. {% endif %}
             </p>
-            <p><strong>Respuesta correcta:</strong> {{ question.correct_answer_display|rich_option }}</p>
-            <p class="explanation"><strong>Explicación:</strong> {{ question.explanation }}</p>
           {% endif %}
+          {% if not question.review_options and selected_kind != "pending" %}
+            <p><strong>Respuesta correcta:</strong> {{ question.correct_answer_display|rich_option }}</p>
+          {% endif %}
+          <p class="explanation"><strong>Justificación:</strong> {{ question.explanation }}</p>
         </article>
       {% endfor %}
     </div>

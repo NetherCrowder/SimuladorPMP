@@ -49,6 +49,26 @@ ECO_DOMAINS = {
     "people": "Personas",
     "business_environment": "Entorno de Negocio",
 }
+PRACTICE_ROUTES = {
+    "performance": {
+        "label": "Ruta 1 · Dominios de desempeño",
+        "table": "question_performance_domains",
+        "column": "domain_id",
+        "categories": PERFORMANCE_DOMAINS,
+    },
+    "eco": {
+        "label": "Ruta 2 · Dominios ECO",
+        "table": "question_eco_domains",
+        "column": "eco_domain_id",
+        "categories": ECO_DOMAINS,
+    },
+    "methodology": {
+        "label": "Ruta 3 · Enfoques de desarrollo",
+        "table": "question_methodologies",
+        "column": "methodology_id",
+        "categories": METHODOLOGIES,
+    },
+}
 VALID_COMBINATIONS = tuple(
     (methodology, eco_domain)
     for methodology in METHODOLOGIES
@@ -415,6 +435,7 @@ def create_app(test_config=None, initialize_database=True):
             stats=stats,
             recent_exams=recent_exams,
             consistency=consistency,
+            practice_routes=PRACTICE_ROUTES,
         )
 
     @app.get("/practice")
@@ -620,40 +641,60 @@ def create_app(test_config=None, initialize_database=True):
             abort(400, "La pregunta no pertenece a esta prueba.")
 
         action = request.form.get("action")
-        if action == "answer":
-            try:
-                response = parse_exam_response(question)
-            except ValueError as error:
-                flash(str(error), "error")
-                return redirect(
-                    url_for("take_exam", exam_id=exam_id, question=question["position"])
+        if action in {"answer", "next", "previous"}:
+            response = None
+            if action == "answer" or has_exam_response(question):
+                try:
+                    response = parse_exam_response(question)
+                except ValueError as error:
+                    if action == "answer":
+                        flash(str(error), "error")
+                        return redirect(
+                            url_for(
+                                "take_exam",
+                                exam_id=exam_id,
+                                question=question["position"],
+                            )
+                        )
+                    flash(
+                        "La respuesta está incompleta y no se guardó. "
+                        "Puedes volver a esta pregunta más tarde.",
+                        "error",
+                    )
+            if response is not None:
+                store_exam_response(
+                    db, exam_id, question_id, g.user["id"], response
                 )
-            selected_option = response if isinstance(response, int) else 0
-            db.execute(
-                "INSERT INTO exam_answers "
-                "(exam_id, question_id, selected_option, response_json, answered_at) "
-                "VALUES (%s, %s, %s, %s, %s) "
-                "ON CONFLICT(exam_id, question_id) DO UPDATE SET "
-                "selected_option = excluded.selected_option, "
-                "response_json = excluded.response_json, answered_at = excluded.answered_at",
-                (
-                    exam_id,
-                    question_id,
-                    selected_option,
-                    json.dumps(response, ensure_ascii=False),
-                    time.time(),
-                ),
+            if action == "answer":
+                db.commit()
+                next_position = request.form.get("next_position", type=int)
+                next_position = next_position or question["position"]
+                return redirect(
+                    url_for("take_exam", exam_id=exam_id, question=next_position)
+                )
+            db.commit()
+            next_position = question["position"] + (
+                1 if action == "next" else -1
             )
-            db.execute(
-                "UPDATE exam_questions SET marked_saved = 0 "
-                "WHERE exam_id = %s AND question_id = %s",
-                (exam_id, question_id),
-            )
-            db.execute(
-                "UPDATE user_question_states SET pending = 0, updated_at = %s "
-                "WHERE user_id = %s AND question_id = %s",
-                (time.time(), g.user["id"], question_id),
-            )
+            next_position = min(max(next_position, 1), exam["requested_count"])
+            return redirect(url_for("take_exam", exam_id=exam_id, question=next_position))
+        elif action == "finish":
+            if has_exam_response(question):
+                try:
+                    response = parse_exam_response(question)
+                except ValueError:
+                    flash(
+                        "La respuesta está incompleta y no se guardó antes de "
+                        "finalizar la prueba.",
+                        "error",
+                    )
+                else:
+                    store_exam_response(
+                        db, exam_id, question_id, g.user["id"], response
+                    )
+            db.commit()
+            finalize_exam(db, exam)
+            return redirect(url_for("exam_results", exam_id=exam_id))
         elif action == "save":
             db.execute(
                 "DELETE FROM exam_answers WHERE exam_id = %s AND question_id = %s",
@@ -669,17 +710,28 @@ def create_app(test_config=None, initialize_database=True):
                 "WHERE user_id = %s AND question_id = %s",
                 (time.time(), g.user["id"], question_id),
             )
-        elif action == "finish":
             db.commit()
-            finalize_exam(db, exam)
-            return redirect(url_for("exam_results", exam_id=exam_id))
+            if question["position"] == exam["requested_count"]:
+                finalize_exam(db, exam)
+                return redirect(url_for("exam_results", exam_id=exam_id))
+            return redirect(
+                url_for(
+                    "take_exam",
+                    exam_id=exam_id,
+                    question=question["position"] + 1,
+                )
+            )
         else:
             abort(400, "Acción no válida.")
 
         db.commit()
-        next_position = request.form.get("next_position", type=int)
-        next_position = next_position or question["position"]
-        return redirect(url_for("take_exam", exam_id=exam_id, question=next_position))
+        return redirect(
+            url_for(
+                "take_exam",
+                exam_id=exam_id,
+                question=question["position"],
+            )
+        )
 
     @app.get("/exams/<int:exam_id>/results")
     @login_required
@@ -834,6 +886,10 @@ def create_app(test_config=None, initialize_database=True):
                     correct=True,
                 )
             )
+            if item["question_type"] in {"multiple_choice", "visual_based"}:
+                item["review_options"] = build_review_options(
+                    item["options"], item["correct_answer"], response
+                )
             if kind == "both" and item["result"] in {
                 "correct",
                 "incorrect",
@@ -852,25 +908,59 @@ def create_app(test_config=None, initialize_database=True):
         kind = request.args.get("kind", "all")
         if kind not in {"all", "used", "pending", "favorites"}:
             abort(400, "Filtro de banco no válido.")
+        route = request.args.get("route", "all")
+        if route != "all" and route not in PRACTICE_ROUTES:
+            abort(400, "Ruta de preguntas no válida.")
+        category = request.args.get("category", "")
+        route_config = PRACTICE_ROUTES.get(route)
+        if category and (
+            route_config is None or category not in route_config["categories"]
+        ):
+            abort(400, "Categoría de ruta no válida.")
         condition = {
             "all": "1 = 1",
             "used": "s.seen_count > 0",
             "pending": "s.pending = 1",
             "favorites": "s.favorite = 1",
         }[kind]
+        route_join = ""
+        route_column = "NULL"
+        if route != "all":
+            route_join = (
+                f"JOIN {route_config['table']} category "
+                "ON category.question_id = q.id "
+            )
+            route_column = f"category.{route_config['column']}"
+            if category:
+                condition += f" AND category.{route_config['column']} = %s"
         rows = get_db().execute(
             "SELECT q.id, q.prompt, q.options_json, q.explanation, q.source_type, "
+            "q.question_type, q.correct_answer_json, "
+            f"{route_column} AS route_category, "
             "s.favorite, s.pending, s.seen_count FROM user_question_states s "
             "JOIN questions q ON q.id = s.question_id "
-            f"WHERE s.user_id = %s AND {condition} ORDER BY s.updated_at DESC",
-            (g.user["id"],),
+            f"{route_join}WHERE s.user_id = %s AND {condition} "
+            "ORDER BY s.updated_at DESC",
+            (g.user["id"], category) if category else (g.user["id"],),
         ).fetchall()
         questions = []
         for row in rows:
             item = dict(row)
             item["options"] = json.loads(item.pop("options_json"))
+            item["correct_answer"] = json.loads(item.pop("correct_answer_json"))
+            if item["question_type"] in {"multiple_choice", "visual_based"}:
+                item["review_options"] = build_review_options(
+                    item["options"], item["correct_answer"], None
+                )
             questions.append(item)
-        return render_template("bank.html", questions=questions, selected_kind=kind)
+        return render_template(
+            "bank.html",
+            questions=questions,
+            selected_kind=kind,
+            selected_route=route,
+            selected_category=category,
+            practice_routes=PRACTICE_ROUTES,
+        )
 
     @app.post("/bank/<int:question_id>/favorite")
     @login_required
@@ -1974,6 +2064,52 @@ def parse_exam_response(question):
     raise ValueError("El tipo de pregunta no es válido.")
 
 
+def has_exam_response(question):
+    question_type = question["question_type"]
+    if question_type in {"multiple_choice", "visual_based"}:
+        return "selected_option" in request.form
+    fields = {
+        "multiple_responses": "selected_options",
+        "case_set": "case_answers",
+        "drag_drop": "drag_match",
+        "pull_down": "blank_answers",
+    }
+    if question_type in fields:
+        return any(value.strip() for value in request.form.getlist(fields[question_type]))
+    if question_type == "hotspot":
+        return bool(request.form.get("hotspot_point", "").strip())
+    return False
+
+
+def store_exam_response(db, exam_id, question_id, user_id, response):
+    selected_option = response if isinstance(response, int) else 0
+    db.execute(
+        "INSERT INTO exam_answers "
+        "(exam_id, question_id, selected_option, response_json, answered_at) "
+        "VALUES (%s, %s, %s, %s, %s) "
+        "ON CONFLICT(exam_id, question_id) DO UPDATE SET "
+        "selected_option = excluded.selected_option, "
+        "response_json = excluded.response_json, answered_at = excluded.answered_at",
+        (
+            exam_id,
+            question_id,
+            selected_option,
+            json.dumps(response, ensure_ascii=False),
+            time.time(),
+        ),
+    )
+    db.execute(
+        "UPDATE exam_questions SET marked_saved = 0 "
+        "WHERE exam_id = %s AND question_id = %s",
+        (exam_id, question_id),
+    )
+    db.execute(
+        "UPDATE user_question_states SET pending = 0, updated_at = %s "
+        "WHERE user_id = %s AND question_id = %s",
+        (time.time(), user_id, question_id),
+    )
+
+
 def prepare_exam_question(question):
     question["options"] = json.loads(question.pop("options_json"))
     question["content"] = json.loads(question.pop("content_json") or "{}")
@@ -2022,6 +2158,19 @@ def valid_single_choice_answer(question_type, answer, options):
     return question_type not in {"multiple_choice", "visual_based"} or (
         type(answer) is int and 0 <= answer < len(options)
     )
+
+
+def build_review_options(options, correct_answer, response):
+    valid_answer = type(correct_answer) is int and 0 <= correct_answer < len(options)
+    return [
+        {
+            "letter": chr(ord("A") + index),
+            "text": option,
+            "correct": index == correct_answer if valid_answer else None,
+            "selected": type(response) is int and index == response,
+        }
+        for index, option in enumerate(options)
+    ]
 
 
 def format_pull_down_review_prompt(prompt_parts, options, response):
@@ -2280,28 +2429,11 @@ def official_exam_questions(db, requested_count):
 
 
 def practice_consistency(db, user_id):
-    axis_tables = {
-        "performance": (
-            "question_performance_domains",
-            "domain_id",
-            PERFORMANCE_DOMAINS,
-            "Ruta 1 · Dominios de desempeño",
-        ),
-        "eco": (
-            "question_eco_domains",
-            "eco_domain_id",
-            ECO_DOMAINS,
-            "Ruta 2 · Dominios ECO",
-        ),
-        "methodology": (
-            "question_methodologies",
-            "methodology_id",
-            METHODOLOGIES,
-            "Ruta 3 · Enfoques de desarrollo",
-        ),
-    }
     result = []
-    for axis, (table, column, categories, route_label) in axis_tables.items():
+    for axis, route in PRACTICE_ROUTES.items():
+        table = route["table"]
+        column = route["column"]
+        categories = route["categories"]
         rows = db.execute(
             f"SELECT e.id AS exam_id, e.filters_json, e.ended_at, "
             f"q.question_type, q.correct_answer_json, q.correct_option, "
@@ -2345,8 +2477,10 @@ def practice_consistency(db, user_id):
             )[:3]
             result.append(
                 {
-                    "route": route_label,
+                    "route": route["label"],
+                    "route_id": axis,
                     "label": label,
+                    "category_id": category_id,
                     "attempt_count": len(category_attempts),
                     "consistency": (
                         round(
