@@ -14,6 +14,7 @@
     <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='incorrect') }}"><strong>{{ counts.incorrect or 0 }}</strong><span>Malas</span></a>
     <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}"><strong>{{ (counts.correct or 0) + (counts.incorrect or 0) }}</strong><span>Ambas</span></a>
     <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='pending') }}"><strong>{{ counts.pending or 0 }}</strong><span>Preguntas para revisar</span></a>
+    <a class="stat-card" href="{{ url_for('review_exam', exam_id=exam.id, kind='unanswered') }}"><strong>{{ counts.unanswered or 0 }}</strong><span>Sin responder</span></a>
   </section>
   {% if official_exam %}
     <section class="panel performance-breakdown">

@@ -696,10 +696,19 @@ def create_app(test_config=None, initialize_database=True):
             finalize_exam(db, exam)
             return redirect(url_for("exam_results", exam_id=exam_id))
         elif action == "save":
-            db.execute(
-                "DELETE FROM exam_answers WHERE exam_id = %s AND question_id = %s",
-                (exam_id, question_id),
-            )
+            if has_exam_response(question):
+                try:
+                    response = parse_exam_response(question)
+                except ValueError:
+                    flash(
+                        "La respuesta está incompleta y no se guardó. "
+                        "Se conservará la última respuesta válida.",
+                        "error",
+                    )
+                else:
+                    store_exam_response(
+                        db, exam_id, question_id, g.user["id"], response
+                    )
             db.execute(
                 "UPDATE exam_questions SET marked_saved = 1 "
                 "WHERE exam_id = %s AND question_id = %s",
@@ -745,8 +754,9 @@ def create_app(test_config=None, initialize_database=True):
             else:
                 return redirect(url_for("take_exam", exam_id=exam_id))
         rows = db.execute(
-            "SELECT q.question_type, q.content_json, q.correct_answer_json, "
-            "q.correct_option, eq.marked_saved, a.selected_option, a.response_json, "
+            "SELECT q.question_type, q.options_json, q.content_json, "
+            "q.correct_answer_json, q.correct_option, eq.marked_saved, "
+            "a.selected_option, a.response_json, "
             "(SELECT eco_domain_id FROM question_eco_domains "
             "WHERE question_id = q.id LIMIT 1) AS eco_domain_id, "
             "(SELECT methodology_id FROM question_methodologies "
@@ -756,16 +766,34 @@ def create_app(test_config=None, initialize_database=True):
             "AND a.question_id = eq.question_id WHERE eq.exam_id = %s",
             (exam_id,),
         ).fetchall()
-        counts = {"total": len(rows), "correct": 0, "incorrect": 0, "pending": 0}
+        counts = {
+            "total": len(rows),
+            "correct": 0,
+            "incorrect": 0,
+            "pending": 0,
+            "unanswered": 0,
+        }
         for row in rows:
-            if row["marked_saved"] or (
-                row["response_json"] is None and row["selected_option"] is None
-            ):
-                counts["pending"] += 1
-            elif exam_response_is_correct(row):
+            response = (
+                json.loads(row["response_json"])
+                if row["response_json"] is not None
+                else row["selected_option"]
+            )
+            if response is None:
+                counts["incorrect"] += 1
+                counts["unanswered"] += 1
+            elif valid_single_choice_answer(
+                row["question_type"],
+                json.loads(
+                    row["correct_answer_json"] or str(row["correct_option"])
+                ),
+                json.loads(row["options_json"]),
+            ) and exam_response_is_correct(row):
                 counts["correct"] += 1
             else:
                 counts["incorrect"] += 1
+            if row["marked_saved"] and response is not None:
+                counts["pending"] += 1
         counts["score"] = (
             round(counts["correct"] * 100 / counts["total"])
             if counts["total"]
@@ -791,7 +819,18 @@ def create_app(test_config=None, initialize_database=True):
                             and row[row_key] in {"agile", "hybrid"}
                         )
                     ]
-                    correct = sum(exam_response_is_correct(row) for row in relevant)
+                    correct = sum(
+                        valid_single_choice_answer(
+                            row["question_type"],
+                            json.loads(
+                                row["correct_answer_json"]
+                                or str(row["correct_option"])
+                            ),
+                            json.loads(row["options_json"]),
+                        )
+                        and exam_response_is_correct(row)
+                        for row in relevant
+                    )
                     axis_breakdown.append(
                         {
                             "label": label,
@@ -821,7 +860,13 @@ def create_app(test_config=None, initialize_database=True):
         if exam["status"] == "active":
             return redirect(url_for("exam_results", exam_id=exam_id))
         kind = request.args.get("kind", "both")
-        if kind not in {"correct", "incorrect", "both", "pending"}:
+        if kind not in {
+            "correct",
+            "incorrect",
+            "both",
+            "pending",
+            "unanswered",
+        }:
             abort(400, "Filtro no válido.")
         rows = db.execute(
             "SELECT q.id, q.prompt, q.options_json, q.option_feedback_json, "
@@ -862,8 +907,8 @@ def create_app(test_config=None, initialize_database=True):
                     item["id"],
                     item["correct_answer"],
                 )
-            if response is None or item["marked_saved"]:
-                item["result"] = "pending"
+            if response is None:
+                item["result"] = "unanswered"
             elif invalid_correct_answer:
                 item["result"] = "invalid"
             elif exam_response_is_correct(
@@ -886,18 +931,36 @@ def create_app(test_config=None, initialize_database=True):
                     correct=True,
                 )
             )
-            if item["question_type"] in {"multiple_choice", "visual_based"}:
+            if (
+                response is not None
+                and item["question_type"] in {"multiple_choice", "visual_based"}
+            ):
                 item["review_options"] = build_review_options(
                     item["options"], item["correct_answer"], response
                 )
-            if kind == "both" and item["result"] in {
-                "correct",
+            if kind == "both":
+                reviewed.append(item)
+            elif kind == "incorrect" and item["result"] in {
                 "incorrect",
                 "invalid",
+                "unanswered",
             }:
+                reviewed.append(item)
+            elif (
+                kind == "pending"
+                and item["marked_saved"]
+                and item["result"] != "unanswered"
+            ):
                 reviewed.append(item)
             elif kind == item["result"]:
                 reviewed.append(item)
+        if kind in {"both", "incorrect"}:
+            reviewed.sort(
+                key=lambda item: (
+                    item["result"] == "unanswered",
+                    item["position"],
+                )
+            )
         return render_template(
             "review.html", exam=exam, questions=reviewed, selected_kind=kind
         )
@@ -906,7 +969,7 @@ def create_app(test_config=None, initialize_database=True):
     @login_required
     def personal_bank():
         kind = request.args.get("kind", "all")
-        if kind not in {"all", "used", "pending", "favorites"}:
+        if kind not in {"all", "used", "pending", "unanswered", "favorites"}:
             abort(400, "Filtro de banco no válido.")
         route = request.args.get("route", "all")
         if route != "all" and route not in PRACTICE_ROUTES:
@@ -920,7 +983,15 @@ def create_app(test_config=None, initialize_database=True):
         condition = {
             "all": "1 = 1",
             "used": "s.seen_count > 0",
-            "pending": "s.pending = 1",
+            "pending": (
+                "s.pending = 1 AND latest_attempt.marked_saved = 1 "
+                "AND (latest_attempt.response_json IS NOT NULL "
+                "OR latest_attempt.selected_option IS NOT NULL)"
+            ),
+            "unanswered": (
+                "s.pending = 1 AND latest_attempt.response_json IS NULL "
+                "AND latest_attempt.selected_option IS NULL"
+            ),
             "favorites": "s.favorite = 1",
         }[kind]
         route_join = ""
@@ -935,10 +1006,21 @@ def create_app(test_config=None, initialize_database=True):
                 condition += f" AND category.{route_config['column']} = %s"
         rows = get_db().execute(
             "SELECT q.id, q.prompt, q.options_json, q.explanation, q.source_type, "
-            "q.question_type, q.correct_answer_json, "
+            "q.question_type, q.content_json, q.correct_answer_json, q.correct_option, "
             f"{route_column} AS route_category, "
-            "s.favorite, s.pending, s.seen_count FROM user_question_states s "
+            "s.favorite, s.pending, s.seen_count, "
+            "latest_attempt.marked_saved, latest_attempt.selected_option, "
+            "latest_attempt.response_json "
+            "FROM user_question_states s "
             "JOIN questions q ON q.id = s.question_id "
+            "LEFT JOIN LATERAL ("
+            "SELECT eq.marked_saved, a.selected_option, a.response_json "
+            "FROM exam_questions eq JOIN exams e ON e.id = eq.exam_id "
+            "LEFT JOIN exam_answers a ON a.exam_id = eq.exam_id "
+            "AND a.question_id = eq.question_id "
+            "WHERE e.user_id = s.user_id AND eq.question_id = q.id "
+            "ORDER BY e.started_at DESC, e.id DESC LIMIT 1"
+            ") latest_attempt ON TRUE "
             f"{route_join}WHERE s.user_id = %s AND {condition} "
             "ORDER BY s.updated_at DESC",
             (g.user["id"], category) if category else (g.user["id"],),
@@ -948,9 +1030,47 @@ def create_app(test_config=None, initialize_database=True):
             item = dict(row)
             item["options"] = json.loads(item.pop("options_json"))
             item["correct_answer"] = json.loads(item.pop("correct_answer_json"))
-            if item["question_type"] in {"multiple_choice", "visual_based"}:
+            item["content"] = json.loads(item.pop("content_json") or "{}")
+            item["response"] = (
+                json.loads(item["response_json"])
+                if item["response_json"] is not None
+                else item["selected_option"]
+            )
+            item["answered"] = item["response"] is not None
+            item["answer_correct"] = (
+                item["answered"]
+                and valid_single_choice_answer(
+                    item["question_type"],
+                    item["correct_answer"],
+                    item["options"],
+                )
+                and exam_response_is_correct(
+                    {
+                        "question_type": item["question_type"],
+                        "correct_answer_json": json.dumps(item["correct_answer"]),
+                        "response_json": json.dumps(item["response"]),
+                    }
+                )
+            )
+            item["user_answer_display"] = format_exam_answer(
+                item["question_type"],
+                item["options"],
+                item["content"],
+                item["response"],
+            )
+            item["correct_answer_display"] = format_exam_answer(
+                item["question_type"],
+                item["options"],
+                item["content"],
+                item["correct_answer"],
+                correct=True,
+            )
+            if (
+                item["answered"]
+                and item["question_type"] in {"multiple_choice", "visual_based"}
+            ):
                 item["review_options"] = build_review_options(
-                    item["options"], item["correct_answer"], None
+                    item["options"], item["correct_answer"], item["response"]
                 )
             questions.append(item)
         return render_template(

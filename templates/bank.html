@@ -13,6 +13,7 @@
     <a class="{% if selected_kind == 'all' %}active{% endif %}" href="{{ url_for('personal_bank', kind='all', route=selected_route, category=selected_category or none) }}">Todas</a>
     <a class="{% if selected_kind == 'used' %}active{% endif %}" href="{{ url_for('personal_bank', kind='used', route=selected_route, category=selected_category or none) }}">Respondidas</a>
     <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('personal_bank', kind='pending', route=selected_route, category=selected_category or none) }}">Preguntas para revisar</a>
+    <a class="{% if selected_kind == 'unanswered' %}active{% endif %}" href="{{ url_for('personal_bank', kind='unanswered', route=selected_route, category=selected_category or none) }}">Sin responder</a>
     <a class="{% if selected_kind == 'favorites' %}active{% endif %}" href="{{ url_for('personal_bank', kind='favorites', route=selected_route, category=selected_category or none) }}">Favoritas</a>
   </nav>
   {% if questions %}
@@ -20,14 +21,28 @@
       {% for question in questions %}
         <article class="panel review-card">
           <div class="section-heading">
-            <p class="eyebrow">{{ "Automatizada" if question.source_type == "automated" else "Banco general" }} · {{ question.seen_count }} usos{% if question.pending %} · Para revisar{% endif %}{% if question.route_category and selected_route != "all" %} · {{ practice_routes[selected_route].categories[question.route_category] }}{% endif %}</p>
+            <p class="eyebrow">{{ "Automatizada" if question.source_type == "automated" else "Banco general" }} · {{ question.seen_count }} usos{% if question.pending %} · {{ "Para revisar" if question.answered else "Sin responder" }}{% endif %}{% if question.route_category and selected_route != "all" %} · {{ practice_routes[selected_route].categories[question.route_category] }}{% endif %}</p>
             <form method="post" action="{{ url_for('toggle_favorite', question_id=question.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="link-button" type="submit" aria-label="Quitar de favoritas si está marcada">{{ "★ Favorita" if question.favorite else "☆ Marcar favorita" }}</button>
             </form>
           </div>
           <h2>{{ question.prompt }}</h2>
-          {% if question.review_options and selected_kind != "pending" %}
+          {% if question.question_type in ["visual_based", "hotspot"] %}
+            <img class="question-artifact-preview" src="{{ url_for('static', filename=question.content.image_path) }}" alt="Artefacto gráfico de la pregunta">
+          {% endif %}
+          {% if not question.answered and question.question_type == "case_set" %}
+            <div class="case-questions">
+              {% for child in question.content.questions %}
+                <p><strong>{{ loop.index }}. {{ child.prompt }}</strong></p>
+                <ul class="review-options" aria-label="Opciones de respuesta">
+                  {% for option in child.options %}
+                    <li class="review-option"><span><strong>{{ loop.index }}.</strong> {{ option|rich_option }}</span></li>
+                  {% endfor %}
+                </ul>
+              {% endfor %}
+            </div>
+          {% elif question.review_options %}
             <ul class="review-options" aria-label="Opciones de respuesta">
               {% for option in question.review_options %}
                 <li class="review-option {% if option.correct is none %}invalid{% elif option.correct %}correct{% else %}incorrect{% endif %}">
@@ -36,10 +51,22 @@
                     {% if option.correct is none %}Clave no disponible
                     {% elif option.correct %}Correcta
                     {% else %}Incorrecta{% endif %}
+                    {% if option.selected %} · Tu respuesta{% endif %}
                   </span>
                 </li>
               {% endfor %}
             </ul>
+          {% elif not question.answered and question.options %}
+            <ul class="review-options" aria-label="Opciones de respuesta">
+              {% for option in question.options %}
+                <li class="review-option"><span><strong>{{ loop.index }}.</strong> {{ option|rich_option }}</span></li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if question.answered and not question.review_options %}
+            <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
+            <p><strong>Respuesta correcta:</strong> {{ question.correct_answer_display|rich_option }}</p>
+            <p><strong>Resultado:</strong> {% if question.answer_correct %}Correcta{% else %}Incorrecta{% endif %}</p>
           {% endif %}
           <p class="explanation"><strong>Justificación:</strong> {{ question.explanation }}</p>
         </article>

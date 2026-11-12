@@ -1426,6 +1426,11 @@ class SimulatorTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Buenas", response.data)
         self.assertIn(b"Preguntas para revisar", response.data)
+        self.assertIn(b"<strong>2</strong><span>Buenas</span>", response.data)
+        self.assertIn(b"<strong>28</strong><span>Malas</span>", response.data)
+        self.assertIn(b"<strong>1</strong><span>Preguntas para revisar</span>", response.data)
+        self.assertIn(b"<strong>27</strong><span>Sin responder</span>", response.data)
+        self.assertIn(b">7%</p>", response.data)
         with self.connect() as db:
             status = db.execute(
                 "SELECT status FROM exams WHERE id = %s", (exam_id,)
@@ -1447,7 +1452,7 @@ class SimulatorTestCase(unittest.TestCase):
         self.assertEqual(state_count, 30)
         self.assertEqual(pending_count, 28)
         self.assertEqual(favorite_count, 1)
-        self.assertEqual(answer_count, 2)
+        self.assertEqual(answer_count, 3)
 
         correct_review = self.client.get(
             f"/exams/{exam_id}/review?kind=correct"
@@ -1469,13 +1474,25 @@ class SimulatorTestCase(unittest.TestCase):
         pending_review = self.client.get(
             f"/exams/{exam_id}/review?kind=pending"
         )
-        self.assertIn(b"Sin respuesta registrada", pending_review.data)
-        self.assertNotIn(b"Respuesta correcta", pending_review.data)
-        self.assertNotIn(b"Respuesta alternativa", pending_review.data)
+        self.assertIn(b"Tu respuesta", pending_review.data)
+        self.assertIn(b"Respuesta alternativa", pending_review.data)
+        unanswered_review = self.client.get(
+            f"/exams/{exam_id}/review?kind=unanswered"
+        )
+        self.assertIn(b"Sin respuesta registrada", unanswered_review.data)
+        self.assertIn(b"Respuesta alternativa", unanswered_review.data)
+        self.assertNotIn(b"Tu respuesta", unanswered_review.data)
+        self.assertNotIn(b"review-option-status", unanswered_review.data)
         pending_bank = self.client.get("/bank?kind=pending")
         self.assertIn(b"Justificaci", pending_bank.data)
         self.assertIn(b"Preguntas para revisar", pending_bank.data)
-        self.assertNotIn(b"Respuesta alternativa", pending_bank.data)
+        self.assertIn(b"Respuesta alternativa", pending_bank.data)
+        self.assertIn(b"Tu respuesta", pending_bank.data)
+        unanswered_bank = self.client.get("/bank?kind=unanswered")
+        self.assertIn(b"Respuesta alternativa", unanswered_bank.data)
+        self.assertIn(b"Justificaci", unanswered_bank.data)
+        self.assertNotIn(b"Tu respuesta", unanswered_bank.data)
+        self.assertNotIn(b"review-option-status", unanswered_bank.data)
 
     def test_exam_navigation_saves_answers_allows_skips_and_finishes_on_last(self):
         self.register()
