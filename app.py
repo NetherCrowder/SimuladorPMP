@@ -2582,23 +2582,57 @@ def format_pull_down_review_prompt(prompt_parts, options, response):
 def format_exam_answer(question_type, options, content, response, correct=False):
     if response is None:
         return ""
+
+    def valid_index(index, values):
+        return type(index) is int and 0 <= index < len(values)
+
+    invalid_response = "Respuesta guardada no válida (índice fuera de rango)."
     if question_type in {"multiple_choice", "visual_based"}:
-        return options[response]
+        return options[response] if valid_index(response, options) else invalid_response
     if question_type == "multiple_responses":
+        if not isinstance(response, list) or not all(
+            valid_index(index, options) for index in response
+        ):
+            return invalid_response
         return ", ".join(options[index] for index in response)
     if question_type == "case_set":
+        children = content["questions"]
+        if (
+            not isinstance(response, list)
+            or len(response) > len(children)
+            or any(
+                not valid_index(index, child["options"])
+                for child, index in zip(children, response)
+            )
+        ):
+            return invalid_response
         return " | ".join(
             f"{child['prompt']}: {child['options'][index]}"
-            for child, index in zip(content["questions"], response)
+            for child, index in zip(children, response)
         )
     if question_type == "drag_drop":
+        targets = content["targets"]
+        if not isinstance(response, list) or any(
+            not valid_index(target, targets) for target in response
+        ):
+            return invalid_response
         return " | ".join(
-            f"{item} -> {content['targets'][target]}"
+            f"{item} -> {targets[target]}"
             for item, target in zip(options, response)
         )
     if question_type == "pull_down":
+        if not isinstance(response, list) or not all(
+            valid_index(index, options) for index in response
+        ):
+            return invalid_response
         return " / ".join(options[index] for index in response)
     if question_type == "hotspot":
+        if not isinstance(response, dict) or not all(
+            type(response.get(key)) in {int, float}
+            for key in ("x", "y", "width", "height")
+            if correct or key in {"x", "y"}
+        ):
+            return "Respuesta guardada no válida (coordenadas incompletas)."
         if correct:
             hotspot = response
             return (

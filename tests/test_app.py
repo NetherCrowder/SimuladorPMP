@@ -17,6 +17,7 @@ from app import (
     create_app,
     create_superuser_account,
     exam_response_is_correct,
+    format_exam_answer,
     format_pull_down_review_prompt,
     has_exam_response,
     get_db,
@@ -311,6 +312,27 @@ class QuestionTypeResponseTestCase(unittest.TestCase):
         self.assertFalse(valid_single_choice_answer("visual_based", -1, options))
         self.assertTrue(
             valid_single_choice_answer("multiple_responses", [0, 3], options)
+        )
+
+    def test_format_exam_answer_handles_invalid_saved_option_indexes(self):
+        options = ["A", "B", "C", "D"]
+        invalid_message = "Respuesta guardada no válida (índice fuera de rango)."
+
+        self.assertEqual(
+            format_exam_answer("multiple_choice", options, {}, 7),
+            invalid_message,
+        )
+        self.assertEqual(
+            format_exam_answer("multiple_choice", options, {}, -1),
+            invalid_message,
+        )
+        self.assertEqual(
+            format_exam_answer("multiple_responses", options, {}, [0, 5]),
+            invalid_message,
+        )
+        self.assertEqual(
+            format_exam_answer("multiple_choice", options, {}, 2),
+            "C",
         )
 
     def test_pull_down_review_prompt_formats_answered_and_pending_blanks(self):
