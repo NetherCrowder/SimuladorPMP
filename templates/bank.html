@@ -3,25 +3,48 @@
 {% block content %}
   <p class="eyebrow">Banco personal</p>
   <h1>Mis preguntas</h1>
-  {% if selected_route != "all" %}
-    <p class="muted">
-      {{ practice_routes[selected_route].label }}
-      {% if selected_category %} · {{ practice_routes[selected_route].categories[selected_category] }}{% endif %}
-    </p>
+  {% if selected_filter %}
+    <p class="muted">{{ selected_filter_label }}</p>
   {% endif %}
   <nav class="filter-tabs" aria-label="Filtrar banco personal">
-    <a class="{% if selected_kind == 'all' %}active{% endif %}" href="{{ url_for('personal_bank', kind='all', route=selected_route, category=selected_category or none) }}">Todas</a>
-    <a class="{% if selected_kind == 'used' %}active{% endif %}" href="{{ url_for('personal_bank', kind='used', route=selected_route, category=selected_category or none) }}">Respondidas</a>
-    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('personal_bank', kind='pending', route=selected_route, category=selected_category or none) }}">Preguntas para revisar</a>
-    <a class="{% if selected_kind == 'unanswered' %}active{% endif %}" href="{{ url_for('personal_bank', kind='unanswered', route=selected_route, category=selected_category or none) }}">Sin responder</a>
-    <a class="{% if selected_kind == 'favorites' %}active{% endif %}" href="{{ url_for('personal_bank', kind='favorites', route=selected_route, category=selected_category or none) }}">Favoritas</a>
+    <a class="{% if selected_kind == 'all' %}active{% endif %}" href="{{ url_for('personal_bank', kind='all', filter=selected_filter or none) }}">Todas</a>
+    <a class="{% if selected_kind == 'used' %}active{% endif %}" href="{{ url_for('personal_bank', kind='used', filter=selected_filter or none) }}">Respondidas</a>
+    <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('personal_bank', kind='pending', filter=selected_filter or none) }}">Preguntas para revisar</a>
+    <a class="{% if selected_kind == 'unanswered' %}active{% endif %}" href="{{ url_for('personal_bank', kind='unanswered', filter=selected_filter or none) }}">Sin responder</a>
+    <a class="{% if selected_kind == 'favorites' %}active{% endif %}" href="{{ url_for('personal_bank', kind='favorites', filter=selected_filter or none) }}">Favoritas</a>
   </nav>
+  <form class="personal-bank-filters" method="get" action="{{ url_for('personal_bank') }}">
+    <input type="hidden" name="kind" value="{{ selected_kind }}">
+    <label>Ruta y tema
+      <select name="filter">
+        <option value="" {% if not selected_filter %}selected{% endif %}>Todas las rutas y temas</option>
+        {% for route_id, route in practice_routes.items() %}
+          <optgroup label="{{ route.label }}">
+            <option value="route:{{ route_id }}" {% if selected_filter == 'route:' ~ route_id %}selected{% endif %}>Toda la ruta</option>
+            {% for category_id, label in route.categories.items() %}
+              <option value="theme:{{ route_id }}:{{ category_id }}" {% if selected_filter == 'theme:' ~ route_id ~ ':' ~ category_id %}selected{% endif %}>Tema: {{ label }}</option>
+            {% endfor %}
+          </optgroup>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Respuesta agregada desde
+      <input type="date" name="date_from" value="{{ selected_date_from }}">
+    </label>
+    <label>Hasta
+      <input type="date" name="date_to" value="{{ selected_date_to }}">
+    </label>
+    <div class="actions">
+      <button class="button" type="submit">Filtrar</button>
+      <a class="button secondary" href="{{ url_for('personal_bank', kind=selected_kind) }}">Limpiar filtros</a>
+    </div>
+  </form>
   {% if questions %}
     <div class="review-list">
       {% for question in questions %}
         <article class="panel review-card">
           <div class="section-heading">
-            <p class="eyebrow">{{ "Automatizada" if question.source_type == "automated" else "Banco general" }} · {{ question.seen_count }} usos{% if question.pending %} · {{ "Para revisar" if question.answered else "Sin responder" }}{% endif %}{% if question.route_category and selected_route != "all" %} · {{ practice_routes[selected_route].categories[question.route_category] }}{% endif %}</p>
+            <p class="eyebrow">{{ "Automatizada" if question.source_type == "automated" else "Banco general" }} · {{ question.seen_count }} pruebas{% if question.pending %} · {{ "Para revisar" if question.answered else "Sin responder" }}{% endif %}{% if question.route_category and selected_route != "all" %} · {{ practice_routes[selected_route].categories[question.route_category] }}{% endif %}</p>
             <form method="post" action="{{ url_for('toggle_favorite', question_id=question.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="link-button" type="submit" aria-label="Quitar de favoritas si está marcada">{{ "★ Favorita" if question.favorite else "☆ Marcar favorita" }}</button>
@@ -31,13 +54,23 @@
           {% if question.question_type in ["visual_based", "hotspot"] %}
             <img class="question-artifact-preview" src="{{ url_for('static', filename=question.content.image_path) }}" alt="Artefacto gráfico de la pregunta">
           {% endif %}
-          {% if not question.answered and question.question_type == "case_set" %}
+          {% if question.question_type == "case_set" %}
             <div class="case-questions">
-              {% for child in question.content.questions %}
+              {% for child in question.review_children %}
                 <p><strong>{{ loop.index }}. {{ child.prompt }}</strong></p>
                 <ul class="review-options" aria-label="Opciones de respuesta">
                   {% for option in child.options %}
-                    <li class="review-option"><span><strong>{{ loop.index }}.</strong> {{ option|rich_option }}</span></li>
+                    <li class="review-option {{ option.status }}">
+                      <span><strong>{{ option.letter }}.</strong> {{ option.text|rich_option }}</span>
+                      {% if option.status != "unanswered" %}
+                        <span class="review-option-status">
+                          {% if option.correct is none %}Clave no disponible
+                          {% elif option.correct %}Correcta
+                          {% else %}Incorrecta{% endif %}
+                          {% if option.selected %} · Tu respuesta{% endif %}
+                        </span>
+                      {% endif %}
+                    </li>
                   {% endfor %}
                 </ul>
               {% endfor %}
@@ -45,28 +78,29 @@
           {% elif question.review_options %}
             <ul class="review-options" aria-label="Opciones de respuesta">
               {% for option in question.review_options %}
-                <li class="review-option {% if option.correct is none %}invalid{% elif option.correct %}correct{% else %}incorrect{% endif %}">
+                <li class="review-option {{ option.status }}">
                   <span><strong>{{ option.letter }}.</strong> {{ option.text|rich_option }}</span>
-                  <span class="review-option-status">
-                    {% if option.correct is none %}Clave no disponible
-                    {% elif option.correct %}Correcta
-                    {% else %}Incorrecta{% endif %}
-                    {% if option.selected %} · Tu respuesta{% endif %}
-                  </span>
+                  {% if option.status != "unanswered" %}
+                    <span class="review-option-status">
+                      {% if option.correct is none %}Clave no disponible
+                      {% elif option.correct %}Correcta
+                      {% else %}Incorrecta{% endif %}
+                      {% if option.selected %} · Tu respuesta{% endif %}
+                    </span>
+                  {% endif %}
                 </li>
               {% endfor %}
             </ul>
-          {% elif not question.answered and question.options %}
-            <ul class="review-options" aria-label="Opciones de respuesta">
-              {% for option in question.options %}
-                <li class="review-option"><span><strong>{{ loop.index }}.</strong> {{ option|rich_option }}</span></li>
-              {% endfor %}
-            </ul>
           {% endif %}
-          {% if question.answered and not question.review_options %}
+          {% if question.answered and not question.review_options and question.question_type != "case_set" %}
             <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
             <p><strong>Respuesta correcta:</strong> {{ question.correct_answer_display|rich_option }}</p>
             <p><strong>Resultado:</strong> {% if question.answer_correct %}Correcta{% else %}Incorrecta{% endif %}</p>
+          {% endif %}
+          {% if question.answer_added_at %}
+            <p class="muted"><strong>Respuesta agregada al banco personal:</strong> {{ question.answer_added_at|datetime }}</p>
+          {% else %}
+            <p class="muted"><strong>Respuesta agregada al banco personal:</strong> Sin respuesta registrada</p>
           {% endif %}
           <p class="explanation"><strong>Justificación:</strong> {{ question.explanation }}</p>
         </article>

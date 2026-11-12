@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Pruebas · Simulador PMP{% endblock %}
+{% block content %}
+  <p class="eyebrow">{{ route.label }}</p>
+  <h1>Pruebas de {{ category_label }}</h1>
+  <form class="history-filters" method="get">
+    <label>Fecha de presentación
+      <input type="date" name="date" value="{{ selected_date }}">
+    </label>
+    <label>Ordenar por
+      <select name="sort">
+        <option value="newest" {% if selected_sort == "newest" %}selected{% endif %}>Fecha: más reciente</option>
+        <option value="oldest" {% if selected_sort == "oldest" %}selected{% endif %}>Fecha: más antigua</option>
+        <option value="best" {% if selected_sort == "best" %}selected{% endif %}>Resultado: mejor</option>
+        <option value="worst" {% if selected_sort == "worst" %}selected{% endif %}>Resultado: peor</option>
+      </select>
+    </label>
+    <div class="actions">
+      <button class="button" type="submit">Aplicar</button>
+      <a class="button secondary" href="{{ url_for('practice_history', route_id=route_id, category_id=category_id) }}">Limpiar filtros</a>
+    </div>
+  </form>
+  {% if exams %}
+    <ul class="exam-list">
+      {% for exam in exams %}
+        <li>
+          <span>
+            Prueba {{ exam.id }} · {{ exam.requested_count }} preguntas · Presentada el {{ exam.started_at|datetime }}
+            · {{ exam.category_question_count }} de {{ exam.requested_count }} preguntas de este tema
+            · Resultado {{ exam.correct }}/{{ exam.category_question_count }} ({{ exam.score }}%)
+            {% if exam.status == "expired" %} · Tiempo agotado{% endif %}
+          </span>
+          <a href="{{ url_for('exam_results', exam_id=exam.id) }}">Ver resultados</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="panel muted">Aún no hay pruebas presentadas para este tema.</p>
+  {% endif %}
+  <a class="button secondary" href="{{ url_for('dashboard') }}">Volver al inicio</a>
+{% endblock %}

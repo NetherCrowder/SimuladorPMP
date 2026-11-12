@@ -73,8 +73,16 @@ input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 3px 
 .stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0 2rem; }
 .stat-card { display: grid; gap: .2rem; padding: 1.2rem; color: var(--ink); text-decoration: none; }
 .stat-card strong { font-size: 2rem; line-height: 1.1; }
+.result-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.result-grid .stat-card { display: flex; flex-wrap: nowrap; align-items: baseline; justify-content: space-between; gap: .75rem; }
+.result-grid .stat-card .result-count { font-size: 1.5rem; }
+.result-count.correct { color: #177245; }
+.result-count.incorrect { color: #a52b32; }
+.result-count.pending { color: #b45309; }
+.result-count.unanswered { color: #6b7280; }
 .stat-card span { color: var(--muted); }
 .result-grid .stat-card:hover { border-color: var(--blue); }
+.results-actions { justify-content: center; }
 .score-summary { margin: 1.5rem 0; text-align: center; }
 .score-summary h2, .score-summary p { margin-bottom: .35rem; }
 .score-value { color: var(--blue-dark); font-size: 2.5rem; font-weight: 800; }
@@ -111,6 +119,9 @@ td form { margin: 0; }
 .bank-tools { display: grid; grid-template-columns: minmax(15rem, 2fr) repeat(2, minmax(12rem, 1fr)); align-items: end; gap: 1rem; margin: 1rem 0 1.5rem; }
 .bank-tools label { margin: 0; }
 .bank-tools [data-bank-results] { grid-column: 1 / -1; margin: 0; }
+.personal-bank-filters, .history-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); align-items: end; gap: 1rem; margin: 1rem 0 1.5rem; padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--surface); }
+.personal-bank-filters label, .history-filters label { margin: 0; }
+.personal-bank-filters .actions, .history-filters .actions { margin: 0; }
 [data-bank-no-results][hidden] { display: none; }
 .question-artifact-preview { display: block; max-width: 100%; max-height: 34rem; object-fit: contain; }
 .admin-artifact-preview { position: relative; display: inline-block; max-width: 100%; }
@@ -212,13 +223,15 @@ fieldset legend { padding: 0 .4rem; font-size: 1.05rem; font-weight: 750; }
 .filter-tabs { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.5rem 0; }
 .filter-tabs a { padding: .5rem .8rem; border: 1px solid var(--border); border-radius: 2rem; background: white; text-decoration: none; }
 .filter-tabs a.active { border-color: var(--blue); background: #eaf4fc; color: var(--blue-dark); font-weight: 700; }
-.route-questions-link { display: inline-block; margin-top: .75rem; }
+.route-exams-link { display: inline-block; margin-top: .75rem; }
 .review-list { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
 .review-card h2 { margin-bottom: 1rem; }
-.review-options { display: grid; gap: .5rem; margin: 1rem 0; padding: 0; list-style: none; }
-.review-option { display: flex; justify-content: space-between; gap: 1rem; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+.review-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: .5rem; margin: 1rem 0; padding: 0; list-style: none; }
+.review-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .4rem; padding: .55rem .75rem; border: 1px solid var(--border); border-radius: .5rem; }
 .review-option.correct { border-color: #a8d7b9; background: #eaf7ef; }
 .review-option.incorrect { border-color: #e5b7ba; background: #fff3f3; }
+.review-option.pending { border-color: #edbd70; background: #fff5e5; }
+.review-option.unanswered { border-color: #cbd2dc; background: #f0f2f5; }
 .review-option.invalid { border-color: var(--border); background: var(--background); }
 .review-option-status { flex: 0 0 auto; color: var(--muted); font-size: .9rem; }
 .explanation { padding: .9rem; border-left: 4px solid var(--blue); background: #f2f7fb; }
@@ -263,7 +276,7 @@ body.exam-page .question-status-legend i { border-color: #475569; background: #1
 body.exam-page .question-status-legend i.answered { border-color: #166534; background: #123327; }
 body.exam-page .question-status-legend i.saved { border-color: #854d0e; background: #3b2b11; }
 @media (max-width: 600px) {
-  .review-option { flex-direction: column; gap: .25rem; }
+  .review-option { grid-template-columns: minmax(0, 1fr); gap: .25rem .4rem; }
 }
 body.exam-page .site-footer { color: #94a3b8; }
 
@@ -276,7 +289,7 @@ body.exam-page .site-footer { color: #94a3b8; }
   .case-scenario { position: static; max-height: 32vh; }
   .case-scenario h2 { position: static; margin: 0 0 .75rem; padding: 0; }
   .question-navigation { position: static; }
-  .stat-grid { grid-template-columns: 1fr; }
+  .stat-grid, .result-grid { grid-template-columns: 1fr; }
   .page-heading, .exam-topline { align-items: flex-start; flex-direction: column; }
   .exam-clock { justify-items: start; }
   .bank-tools { grid-template-columns: 1fr; }

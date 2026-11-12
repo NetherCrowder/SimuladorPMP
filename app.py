@@ -8,6 +8,7 @@ import secrets
 import tempfile
 import threading
 import time
+from datetime import date, datetime, time as datetime_time, timedelta
 from functools import wraps
 
 import click
@@ -157,6 +158,22 @@ def render_rich_option(value):
     escaped = re.sub(r"\*(.+?)\*", r"<em>\1</em>", escaped)
     escaped = re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
     return Markup(escaped)
+
+
+def local_date_range(value, description):
+    if not value:
+        return None
+    try:
+        selected_date = date.fromisoformat(value)
+    except ValueError:
+        abort(400, f"Fecha {description} no válida.")
+    if selected_date.isoformat() != value:
+        abort(400, f"Fecha {description} no válida.")
+    start = datetime.combine(selected_date, datetime_time.min).timestamp()
+    end = datetime.combine(
+        selected_date + timedelta(days=1), datetime_time.min
+    ).timestamp()
+    return start, end
 
 
 def create_app(test_config=None, initialize_database=True):
@@ -436,6 +453,92 @@ def create_app(test_config=None, initialize_database=True):
             recent_exams=recent_exams,
             consistency=consistency,
             practice_routes=PRACTICE_ROUTES,
+        )
+
+    @app.get("/practice/history/<route_id>/<category_id>")
+    @login_required
+    def practice_history(route_id, category_id):
+        route = PRACTICE_ROUTES.get(route_id)
+        if route is None or category_id not in route["categories"]:
+            abort(404)
+        selected_date = request.args.get("date", "").strip()
+        date_range = local_date_range(selected_date, "de búsqueda")
+        sort = request.args.get("sort", "newest")
+        if sort not in {"newest", "oldest", "best", "worst"}:
+            abort(400, "Orden de pruebas no válido.")
+        rows = get_db().execute(
+            "SELECT e.id, e.requested_count, e.status, e.started_at, e.ended_at, "
+            "q.question_type, q.options_json, q.correct_answer_json, "
+            "q.correct_option, a.response_json, a.selected_option, "
+            "COUNT(*) OVER (PARTITION BY e.id) AS category_question_count "
+            "FROM exams e JOIN exam_questions eq ON eq.exam_id = e.id "
+            "JOIN questions q ON q.id = eq.question_id "
+            "LEFT JOIN exam_answers a ON a.exam_id = e.id "
+            "AND a.question_id = eq.question_id "
+            f"JOIN {route['table']} category ON category.question_id = eq.question_id "
+            "WHERE e.user_id = %s AND e.status IN ('completed', 'expired') "
+            "AND e.requested_count IN (15, 30) "
+            "AND e.filters_json::jsonb ->> 'axis' = %s "
+            "AND COALESCE(e.filters_json::jsonb ->> 'mode', 'practice') = 'practice' "
+            "AND jsonb_exists(e.filters_json::jsonb -> 'values', %s) "
+            f"AND category.{route['column']} = %s "
+            "ORDER BY e.started_at DESC, e.id DESC",
+            (g.user["id"], route_id, category_id, category_id),
+        ).fetchall()
+        grouped_exams = {}
+        for row in rows:
+            exam = grouped_exams.setdefault(
+                row["id"],
+                {
+                    key: row[key]
+                    for key in (
+                        "id",
+                        "requested_count",
+                        "status",
+                        "started_at",
+                        "ended_at",
+                        "category_question_count",
+                    )
+                },
+            )
+            correct_answer = json.loads(
+                row["correct_answer_json"] or str(row["correct_option"])
+            )
+            options = json.loads(row["options_json"])
+            exam["correct"] = exam.get("correct", 0) + int(
+                valid_single_choice_answer(
+                    row["question_type"], correct_answer, options
+                )
+                and exam_response_is_correct(row)
+            )
+        exams = list(grouped_exams.values())
+        if date_range:
+            start, end = date_range
+            exams = [
+                exam
+                for exam in exams
+                if start <= exam["started_at"] < end
+            ]
+        for exam in exams:
+            exam["score"] = round(
+                exam["correct"] * 100 / exam["category_question_count"]
+            )
+        sort_keys = {
+            "newest": lambda exam: (exam["started_at"], exam["id"]),
+            "oldest": lambda exam: (exam["started_at"], exam["id"]),
+            "best": lambda exam: (exam["score"], exam["started_at"], exam["id"]),
+            "worst": lambda exam: (exam["score"], -exam["started_at"], -exam["id"]),
+        }
+        exams.sort(key=sort_keys[sort], reverse=sort in {"newest", "best"})
+        return render_template(
+            "exam_history.html",
+            exams=exams,
+            route=route,
+            route_id=route_id,
+            category_id=category_id,
+            category_label=route["categories"][category_id],
+            selected_date=selected_date,
+            selected_sort=sort,
         )
 
     @app.get("/practice")
@@ -859,11 +962,11 @@ def create_app(test_config=None, initialize_database=True):
         exam = owned_exam(db, exam_id)
         if exam["status"] == "active":
             return redirect(url_for("exam_results", exam_id=exam_id))
-        kind = request.args.get("kind", "both")
+        kind = request.args.get("kind", "incorrect")
         if kind not in {
+            "all",
             "correct",
             "incorrect",
-            "both",
             "pending",
             "unanswered",
         }:
@@ -931,14 +1034,47 @@ def create_app(test_config=None, initialize_database=True):
                     correct=True,
                 )
             )
-            if (
-                response is not None
-                and item["question_type"] in {"multiple_choice", "visual_based"}
-            ):
+            if item["question_type"] in {
+                "multiple_choice",
+                "visual_based",
+                "multiple_responses",
+            }:
                 item["review_options"] = build_review_options(
                     item["options"], item["correct_answer"], response
                 )
-            if kind == "both":
+                set_review_option_status(
+                    item["review_options"],
+                    unanswered=response is None,
+                    pending=False,
+                )
+            elif item["question_type"] == "case_set":
+                item["review_children"] = []
+                responses = response if isinstance(response, list) else []
+                answers = (
+                    item["correct_answer"]
+                    if isinstance(item["correct_answer"], list)
+                    else []
+                )
+                for index, child in enumerate(item["content"]["questions"]):
+                    child_response = (
+                        responses[index] if index < len(responses) else None
+                    )
+                    child_answer = answers[index] if index < len(answers) else None
+                    child_options = build_review_options(
+                        child["options"], child_answer, child_response
+                    )
+                    set_review_option_status(
+                        child_options,
+                        unanswered=child_response is None,
+                        pending=False,
+                    )
+                    item["review_children"].append(
+                        {
+                            "prompt": child["prompt"],
+                            "options": child_options,
+                        }
+                    )
+            if kind == "all" and item["result"] != "unanswered":
                 reviewed.append(item)
             elif kind == "incorrect" and item["result"] in {
                 "incorrect",
@@ -954,7 +1090,7 @@ def create_app(test_config=None, initialize_database=True):
                 reviewed.append(item)
             elif kind == item["result"]:
                 reviewed.append(item)
-        if kind in {"both", "incorrect"}:
+        if kind == "incorrect":
             reviewed.sort(
                 key=lambda item: (
                     item["result"] == "unanswered",
@@ -971,16 +1107,63 @@ def create_app(test_config=None, initialize_database=True):
         kind = request.args.get("kind", "all")
         if kind not in {"all", "used", "pending", "unanswered", "favorites"}:
             abort(400, "Filtro de banco no válido.")
-        route = request.args.get("route", "all")
+        route = "all"
+        category = ""
+        filter_value = request.args.get("filter", "").strip()
+        if filter_value.startswith("route:"):
+            route = filter_value.removeprefix("route:")
+        elif filter_value.startswith("theme:"):
+            parts = filter_value.split(":", 2)
+            if len(parts) != 3 or not parts[2]:
+                abort(400, "Tema de pregunta no válido.")
+            _, route, category = parts
+        elif filter_value:
+            abort(400, "Filtro de ruta o tema no válido.")
+        else:
+            route = request.args.get("route", "all")
+            category = request.args.get("category", "")
+            legacy_theme = request.args.get("theme", "")
+            if legacy_theme:
+                if route == "all":
+                    route = next(
+                        (
+                            route_id
+                            for route_id, config in PRACTICE_ROUTES.items()
+                            if legacy_theme in config["categories"]
+                        ),
+                        "all",
+                    )
+                category = legacy_theme
         if route != "all" and route not in PRACTICE_ROUTES:
             abort(400, "Ruta de preguntas no válida.")
-        category = request.args.get("category", "")
+        date_from = request.args.get("date_from", "").strip()
+        date_to = request.args.get("date_to", "").strip()
+        date_from_range = local_date_range(date_from, "inicial")
+        date_to_range = local_date_range(date_to, "final")
+        if (
+            date_from_range
+            and date_to_range
+            and date_from_range[0] > date_to_range[0]
+        ):
+            abort(400, "La fecha inicial no puede ser posterior a la fecha final.")
         route_config = PRACTICE_ROUTES.get(route)
         if category and (
             route_config is None or category not in route_config["categories"]
         ):
             abort(400, "Categoría de ruta no válida.")
-        condition = {
+        if category:
+            filter_value = f"theme:{route}:{category}"
+        elif route != "all":
+            filter_value = f"route:{route}"
+        selected_filter_label = "Todas las rutas y temas"
+        if route_config and category:
+            selected_filter_label = (
+                f"{route_config['label']} · "
+                f"{route_config['categories'][category]}"
+            )
+        elif route_config:
+            selected_filter_label = route_config["label"]
+        conditions = [{
             "all": "1 = 1",
             "used": "s.seen_count > 0",
             "pending": (
@@ -993,7 +1176,8 @@ def create_app(test_config=None, initialize_database=True):
                 "AND latest_attempt.selected_option IS NULL"
             ),
             "favorites": "s.favorite = 1",
-        }[kind]
+        }[kind]]
+        params = [g.user["id"]]
         route_join = ""
         route_column = "NULL"
         if route != "all":
@@ -1002,15 +1186,24 @@ def create_app(test_config=None, initialize_database=True):
                 "ON category.question_id = q.id "
             )
             route_column = f"category.{route_config['column']}"
-            if category:
-                condition += f" AND category.{route_config['column']} = %s"
+        if category:
+            conditions.append(f"category.{route_config['column']} = %s")
+            params.append(category)
+        if date_from_range:
+            conditions.append("latest_answer.answered_at >= %s")
+            params.append(date_from_range[0])
+        if date_to_range:
+            conditions.append("latest_answer.answered_at < %s")
+            params.append(date_to_range[1])
         rows = get_db().execute(
             "SELECT q.id, q.prompt, q.options_json, q.explanation, q.source_type, "
             "q.question_type, q.content_json, q.correct_answer_json, q.correct_option, "
             f"{route_column} AS route_category, "
             "s.favorite, s.pending, s.seen_count, "
             "latest_attempt.marked_saved, latest_attempt.selected_option, "
-            "latest_attempt.response_json "
+            "latest_attempt.response_json, latest_answer.selected_option AS "
+            "latest_selected_option, latest_answer.response_json AS "
+            "latest_response_json, latest_answer.answered_at AS answer_added_at "
             "FROM user_question_states s "
             "JOIN questions q ON q.id = s.question_id "
             "LEFT JOIN LATERAL ("
@@ -1019,11 +1212,20 @@ def create_app(test_config=None, initialize_database=True):
             "LEFT JOIN exam_answers a ON a.exam_id = eq.exam_id "
             "AND a.question_id = eq.question_id "
             "WHERE e.user_id = s.user_id AND eq.question_id = q.id "
+            "AND e.status IN ('completed', 'expired') "
             "ORDER BY e.started_at DESC, e.id DESC LIMIT 1"
             ") latest_attempt ON TRUE "
-            f"{route_join}WHERE s.user_id = %s AND {condition} "
-            "ORDER BY s.updated_at DESC",
-            (g.user["id"], category) if category else (g.user["id"],),
+            "LEFT JOIN LATERAL ("
+            "SELECT a.selected_option, a.response_json, a.answered_at "
+            "FROM exam_answers a JOIN exams e ON e.id = a.exam_id "
+            "WHERE e.user_id = s.user_id AND a.question_id = q.id "
+            "AND e.status IN ('completed', 'expired') "
+            "AND (a.response_json IS NOT NULL OR a.selected_option IS NOT NULL) "
+            "ORDER BY a.answered_at DESC, e.id DESC LIMIT 1"
+            ") latest_answer ON TRUE "
+            f"{route_join}WHERE s.user_id = %s AND {' AND '.join(conditions)} "
+            "ORDER BY COALESCE(latest_answer.answered_at, s.updated_at) DESC",
+            params,
         ).fetchall()
         questions = []
         for row in rows:
@@ -1032,9 +1234,9 @@ def create_app(test_config=None, initialize_database=True):
             item["correct_answer"] = json.loads(item.pop("correct_answer_json"))
             item["content"] = json.loads(item.pop("content_json") or "{}")
             item["response"] = (
-                json.loads(item["response_json"])
-                if item["response_json"] is not None
-                else item["selected_option"]
+                json.loads(item["latest_response_json"])
+                if item["latest_response_json"] is not None
+                else item["latest_selected_option"]
             )
             item["answered"] = item["response"] is not None
             item["answer_correct"] = (
@@ -1065,13 +1267,48 @@ def create_app(test_config=None, initialize_database=True):
                 item["correct_answer"],
                 correct=True,
             )
-            if (
-                item["answered"]
-                and item["question_type"] in {"multiple_choice", "visual_based"}
-            ):
+            if item["question_type"] in {
+                "multiple_choice",
+                "visual_based",
+                "multiple_responses",
+            }:
                 item["review_options"] = build_review_options(
                     item["options"], item["correct_answer"], item["response"]
                 )
+                set_review_option_status(
+                    item["review_options"],
+                    unanswered=not item["answered"],
+                    pending=item["marked_saved"],
+                )
+            elif item["question_type"] == "case_set":
+                item["review_children"] = []
+                responses = (
+                    item["response"] if isinstance(item["response"], list) else []
+                )
+                answers = (
+                    item["correct_answer"]
+                    if isinstance(item["correct_answer"], list)
+                    else []
+                )
+                for index, child in enumerate(item["content"]["questions"]):
+                    child_response = (
+                        responses[index] if index < len(responses) else None
+                    )
+                    child_answer = answers[index] if index < len(answers) else None
+                    child_options = build_review_options(
+                        child["options"], child_answer, child_response
+                    )
+                    set_review_option_status(
+                        child_options,
+                        unanswered=child_response is None,
+                        pending=item["marked_saved"],
+                    )
+                    item["review_children"].append(
+                        {
+                            "prompt": child["prompt"],
+                            "options": child_options,
+                        }
+                    )
             questions.append(item)
         return render_template(
             "bank.html",
@@ -1079,6 +1316,10 @@ def create_app(test_config=None, initialize_database=True):
             selected_kind=kind,
             selected_route=route,
             selected_category=category,
+            selected_filter=filter_value,
+            selected_filter_label=selected_filter_label,
+            selected_date_from=date_from,
+            selected_date_to=date_to,
             practice_routes=PRACTICE_ROUTES,
         )
 
@@ -2281,16 +2522,46 @@ def valid_single_choice_answer(question_type, answer, options):
 
 
 def build_review_options(options, correct_answer, response):
-    valid_answer = type(correct_answer) is int and 0 <= correct_answer < len(options)
+    if type(correct_answer) is int:
+        valid_answer = 0 <= correct_answer < len(options)
+        correct_indexes = {correct_answer} if valid_answer else set()
+    elif isinstance(correct_answer, list):
+        valid_answer = all(
+            type(index) is int and 0 <= index < len(options)
+            for index in correct_answer
+        )
+        correct_indexes = set(correct_answer) if valid_answer else set()
+    else:
+        valid_answer = False
+        correct_indexes = set()
+    selected_indexes = (
+        {response}
+        if type(response) is int
+        else set(response)
+        if isinstance(response, list)
+        else set()
+    )
     return [
         {
             "letter": chr(ord("A") + index),
             "text": option,
-            "correct": index == correct_answer if valid_answer else None,
-            "selected": type(response) is int and index == response,
+            "correct": index in correct_indexes if valid_answer else None,
+            "selected": index in selected_indexes,
         }
         for index, option in enumerate(options)
     ]
+
+
+def set_review_option_status(options, unanswered, pending):
+    for option in options:
+        if unanswered:
+            option["status"] = "unanswered"
+        elif pending:
+            option["status"] = "pending"
+        elif option["correct"] is None:
+            option["status"] = "invalid"
+        else:
+            option["status"] = "correct" if option["correct"] else "incorrect"
 
 
 def format_pull_down_review_prompt(prompt_parts, options, response):
@@ -2649,7 +2920,7 @@ def finalize_exam(db, exam, expired=False):
         "ON a.exam_id = eq.exam_id AND a.question_id = eq.question_id "
         "WHERE eq.exam_id = %s "
         "ON CONFLICT(user_id, question_id) DO UPDATE SET "
-        "pending = CASE WHEN excluded.pending = 1 THEN 1 ELSE 0 END, "
+        "pending = excluded.pending, "
         "seen_count = user_question_states.seen_count + 1, updated_at = excluded.updated_at",
         (exam["user_id"], now, exam["id"]),
     )

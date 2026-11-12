@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -1424,12 +1425,28 @@ class SimulatorTestCase(unittest.TestCase):
 
         response = self.client.get(f"/exams/{exam_id}/results")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Buenas", response.data)
-        self.assertIn(b"Preguntas para revisar", response.data)
-        self.assertIn(b"<strong>2</strong><span>Buenas</span>", response.data)
-        self.assertIn(b"<strong>28</strong><span>Malas</span>", response.data)
-        self.assertIn(b"<strong>1</strong><span>Preguntas para revisar</span>", response.data)
-        self.assertIn(b"<strong>27</strong><span>Sin responder</span>", response.data)
+        self.assertIn(b"Respuestas correctas", response.data)
+        self.assertIn(b"Respuestas equivocadas", response.data)
+        self.assertIn(b"Para revisar", response.data)
+        self.assertNotIn(b"Ambas", response.data)
+        self.assertIn(b"results-actions", response.data)
+        self.assertIn(b"kind=all", response.data)
+        self.assertIn(
+            b"<span>Respuestas correctas:</span><strong class=\"result-count correct\">2</strong>",
+            response.data,
+        )
+        self.assertIn(
+            b"<span>Respuestas equivocadas:</span><strong class=\"result-count incorrect\">28</strong>",
+            response.data,
+        )
+        self.assertIn(
+            b"<span>Para revisar:</span><strong class=\"result-count pending\">1</strong>",
+            response.data,
+        )
+        self.assertIn(
+            b"<span>Sin responder:</span><strong class=\"result-count unanswered\">27</strong>",
+            response.data,
+        )
         self.assertIn(b">7%</p>", response.data)
         with self.connect() as db:
             status = db.execute(
@@ -1457,28 +1474,38 @@ class SimulatorTestCase(unittest.TestCase):
         correct_review = self.client.get(
             f"/exams/{exam_id}/review?kind=correct"
         )
-        self.assertIn(b"A.", correct_review.data)
+        self.assertIn(b"<strong>A.</strong>", correct_review.data)
+        self.assertNotIn("Opción:".encode(), correct_review.data)
+        self.assertIn(b"review-option correct", correct_review.data)
         self.assertIn(b"Correcta", correct_review.data)
         self.assertIn(b"Tu respuesta", correct_review.data)
         self.assertIn(b"Retroalimentaci", correct_review.data)
         incorrect_review = self.client.get(
             f"/exams/{exam_id}/review?kind=incorrect"
         )
-        self.assertIn(b"Mala", incorrect_review.data)
+        self.assertIn(b"Equivocada", incorrect_review.data)
         self.assertIn(b"Tu respuesta es incorrecta", incorrect_review.data)
         self.assertIn(b"no coincide con la respuesta definida", incorrect_review.data)
         self.assertIn(b"Retroalimentaci", incorrect_review.data)
-        both_review = self.client.get(f"/exams/{exam_id}/review?kind=both")
-        self.assertIn(b"Buena", both_review.data)
-        self.assertIn(b"Mala", both_review.data)
+        all_review = self.client.get(f"/exams/{exam_id}/review?kind=all")
+        self.assertIn(b"Correcta", all_review.data)
+        self.assertIn(b"Incorrecta", all_review.data)
+        self.assertEqual(
+            self.client.get(f"/exams/{exam_id}/review?kind=both").status_code,
+            400,
+        )
         pending_review = self.client.get(
             f"/exams/{exam_id}/review?kind=pending"
         )
+        self.assertIn(b"review-option correct", pending_review.data)
+        self.assertIn(b"review-option incorrect", pending_review.data)
+        self.assertNotIn(b"review-option pending", pending_review.data)
         self.assertIn(b"Tu respuesta", pending_review.data)
         self.assertIn(b"Respuesta alternativa", pending_review.data)
         unanswered_review = self.client.get(
             f"/exams/{exam_id}/review?kind=unanswered"
         )
+        self.assertIn(b"review-option unanswered", unanswered_review.data)
         self.assertIn(b"Sin respuesta registrada", unanswered_review.data)
         self.assertIn(b"Respuesta alternativa", unanswered_review.data)
         self.assertNotIn(b"Tu respuesta", unanswered_review.data)
@@ -1488,6 +1515,8 @@ class SimulatorTestCase(unittest.TestCase):
         self.assertIn(b"Preguntas para revisar", pending_bank.data)
         self.assertIn(b"Respuesta alternativa", pending_bank.data)
         self.assertIn(b"Tu respuesta", pending_bank.data)
+        self.assertIn(b"<strong>A.</strong>", pending_bank.data)
+        self.assertNotIn("Opción:".encode(), pending_bank.data)
         unanswered_bank = self.client.get("/bank?kind=unanswered")
         self.assertIn(b"Respuesta alternativa", unanswered_bank.data)
         self.assertIn(b"Justificaci", unanswered_bank.data)
@@ -1566,7 +1595,8 @@ class SimulatorTestCase(unittest.TestCase):
         for route in PRACTICE_ROUTES.values():
             self.assertIn(route["label"].encode(), dashboard.data)
             for label in route["categories"].values():
-                self.assertIn(f"Ver preguntas de {label}".encode(), dashboard.data)
+                self.assertIn(f"Ver pruebas de {label}".encode(), dashboard.data)
+                self.assertNotIn(f"Ver preguntas de {label}".encode(), dashboard.data)
         self.add_questions(30)
         started = self.client.post(
             "/practice/start",
@@ -1581,7 +1611,144 @@ class SimulatorTestCase(unittest.TestCase):
             ).fetchone()["question_id"]
         self.client.post(
             f"/exams/{exam_id}/answer",
+            data={
+                "action": "answer",
+                "question_id": question_id,
+                "selected_option": "0",
+            },
+        )
+        self.client.post(
+            f"/exams/{exam_id}/answer",
             data={"action": "finish", "question_id": question_id},
+        )
+        second_started = self.client.post(
+            "/practice/start",
+            data={**self.selected_filters(), "length": "30"},
+        )
+        second_exam_id = int(
+            urlsplit(second_started.headers["Location"]).path.rsplit("/", 1)[1]
+        )
+        self.client.post(
+            f"/exams/{second_exam_id}/answer",
+            data={
+                "action": "answer",
+                "question_id": question_id,
+                "selected_option": "1",
+            },
+        )
+        self.client.post(
+            f"/exams/{second_exam_id}/answer",
+            data={"action": "finish", "question_id": question_id},
+        )
+        with self.connect() as db:
+            db.execute(
+                "UPDATE exams SET started_at = %s WHERE id = %s",
+                (time.time() - 2 * 24 * 60 * 60, exam_id),
+            )
+        history = self.client.get("/practice/history/performance/governance")
+        self.assertEqual(history.status_code, 200)
+        self.assertIn(b"Pruebas de Gobernanza", history.data)
+        self.assertIn(b"Presentada el", history.data)
+        self.assertIn(b"Ver resultados", history.data)
+        self.assertEqual(history.data.count(b"Ver resultados"), 2)
+        self.assertEqual(history.data.count(b"exam-list"), 1)
+        best_history = self.client.get(
+            "/practice/history/performance/governance?sort=best"
+        )
+        self.assertLess(
+            best_history.data.index(f"Prueba {exam_id}".encode()),
+            best_history.data.index(f"Prueba {second_exam_id}".encode()),
+        )
+        with self.connect() as db:
+            latest_answer_at = db.execute(
+                "SELECT answered_at FROM exam_answers "
+                "WHERE exam_id = %s AND question_id = %s",
+                (second_exam_id, question_id),
+            ).fetchone()["answered_at"]
+            second_exam_started_at = db.execute(
+                "SELECT started_at FROM exams WHERE id = %s",
+                (second_exam_id,),
+            ).fetchone()["started_at"]
+            question_prompt = db.execute(
+                "SELECT prompt FROM questions WHERE id = %s",
+                (question_id,),
+            ).fetchone()["prompt"]
+        answer_date = time.strftime(
+            "%Y-%m-%d", time.localtime(latest_answer_at)
+        )
+        exam_date = time.strftime(
+            "%Y-%m-%d", time.localtime(second_exam_started_at)
+        )
+        dated_history = self.client.get(
+            f"/practice/history/performance/governance?date={exam_date}"
+        )
+        self.assertEqual(dated_history.data.count(b"Ver resultados"), 1)
+        self.assertIn(f"Prueba {second_exam_id}".encode(), dated_history.data)
+        oldest_history = self.client.get(
+            "/practice/history/performance/governance?sort=oldest"
+        )
+        self.assertLess(
+            oldest_history.data.index(f"Prueba {exam_id}".encode()),
+            oldest_history.data.index(f"Prueba {second_exam_id}".encode()),
+        )
+        worst_history = self.client.get(
+            "/practice/history/performance/governance?sort=worst"
+        )
+        self.assertLess(
+            worst_history.data.index(f"Prueba {second_exam_id}".encode()),
+            worst_history.data.index(f"Prueba {exam_id}".encode()),
+        )
+        self.assertEqual(
+            self.client.get(
+                "/practice/history/performance/governance?date=not-a-date"
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/practice/history/performance/governance?sort=invalid"
+            ).status_code,
+            400,
+        )
+        bank = self.client.get(
+            "/bank?route=performance&category=governance"
+        )
+        self.assertEqual(bank.data.count(f"Pregunta ficticia".encode()), 30)
+        self.assertIn(b"Respuesta alternativa", bank.data)
+        self.assertIn(b"Tu respuesta", bank.data)
+        self.assertIn(b"Respuesta agregada al banco personal:", bank.data)
+        bank_html = bank.data.decode()
+        card_end = bank_html.index("</article>", bank_html.index(question_prompt))
+        card_start = bank_html.rfind(
+            '<article class="panel review-card">', 0, card_end
+        )
+        question_card = bank_html[card_start:card_end]
+        self.assertEqual(question_card.count(question_prompt), 1)
+        self.assertIn("2 pruebas", question_card)
+        self.assertIn("Respuesta alternativa", question_card)
+        self.assertIn("Tu respuesta", question_card)
+        dated_bank = self.client.get(
+            "/bank?route=performance&category=governance"
+            f"&date_from={answer_date}&date_to={answer_date}"
+        )
+        self.assertIn(b"Tu respuesta", dated_bank.data)
+        self.assertEqual(
+            self.client.get("/bank?date_from=not-a-date").status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/bank?date_from=2026-02-02&date_to=2026-02-01"
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.get("/practice/history/invalid/category").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get("/practice/history/performance/people").status_code,
+            404,
         )
 
         with self.connect() as db:
@@ -1617,8 +1784,30 @@ class SimulatorTestCase(unittest.TestCase):
                         category_response.data.count(b"Pregunta ficticia"),
                         category_expected,
                     )
+                    route_filter_response = self.client.get(
+                        f"/bank?filter=route:{route_id}"
+                    )
+                    self.assertEqual(route_filter_response.status_code, 200)
+                    self.assertEqual(
+                        route_filter_response.data.count(b"Pregunta ficticia"),
+                        expected,
+                    )
+                    theme_response = self.client.get(
+                        f"/bank?filter=theme:{route_id}:{category_id}"
+                    )
+                    self.assertEqual(theme_response.status_code, 200)
+                    self.assertIn(label.encode(), theme_response.data)
+                    self.assertEqual(
+                        theme_response.data.count(b"Pregunta ficticia"),
+                        category_expected,
+                    )
+                    self.assertIn(b'name="filter"', theme_response.data)
+                    self.assertNotIn(b'name="route"', theme_response.data)
+                    self.assertNotIn(b'name="theme"', theme_response.data)
 
         self.assertEqual(self.client.get("/bank?route=invalid").status_code, 400)
+        self.assertEqual(self.client.get("/bank?filter=invalid").status_code, 400)
+        self.assertEqual(self.client.get("/bank?theme=invalid").status_code, 400)
         self.assertEqual(
             self.client.get("/bank?route=performance&category=people").status_code,
             400,

@@ -4,9 +4,8 @@
   <p class="eyebrow">Prueba {{ exam.id }}</p>
   <h1>Revisión de respuestas</h1>
   <nav class="filter-tabs" aria-label="Filtrar respuestas">
-    <a class="{% if selected_kind == 'correct' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='correct') }}">Buenas</a>
-    <a class="{% if selected_kind == 'incorrect' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='incorrect') }}">Malas</a>
-    <a class="{% if selected_kind == 'both' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='both') }}">Ambas</a>
+    <a class="{% if selected_kind == 'correct' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='correct') }}">Respuestas correctas</a>
+    <a class="{% if selected_kind == 'incorrect' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='incorrect') }}">Respuestas equivocadas</a>
     <a class="{% if selected_kind == 'pending' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='pending') }}">Para revisar</a>
     <a class="{% if selected_kind == 'unanswered' %}active{% endif %}" href="{{ url_for('review_exam', exam_id=exam.id, kind='unanswered') }}">Sin responder</a>
   </nav>
@@ -15,8 +14,8 @@
       {% for question in questions %}
         <article class="panel review-card">
           <p class="eyebrow">Pregunta {{ question.position }} · {% if question.marked_saved %}Para revisar · {% endif %}
-            {% if question.result == "correct" %}Buena
-            {% elif question.result == "incorrect" %}Mala
+            {% if question.result == "correct" %}Correcta
+            {% elif question.result == "incorrect" %}Equivocada
             {% elif question.result == "invalid" %}Error en la clave
             {% else %}Sin responder{% endif %}
           </p>
@@ -28,34 +27,38 @@
           {% if question.review_options %}
             <ul class="review-options" aria-label="Opciones de respuesta">
               {% for option in question.review_options %}
-                <li class="review-option {% if option.correct is none %}invalid{% elif option.correct %}correct{% else %}incorrect{% endif %}">
+                <li class="review-option {{ option.status }}">
                   <span><strong>{{ option.letter }}.</strong> {{ option.text|rich_option }}</span>
-                  <span class="review-option-status">
-                    {% if option.correct is none %}Clave no disponible
-                    {% elif option.correct %}Correcta
-                    {% else %}Incorrecta{% endif %}
-                    {% if option.selected %} · Tu respuesta{% endif %}
-                  </span>
+                  {% if option.status != "unanswered" %}
+                    <span class="review-option-status">
+                      {% if option.correct is none %}Clave no disponible
+                      {% elif option.correct %}Correcta
+                      {% else %}Incorrecta{% endif %}
+                      {% if option.selected %} · Tu respuesta{% endif %}
+                    </span>
+                  {% endif %}
                 </li>
-              {% endfor %}
-            </ul>
-          {% elif question.result == "unanswered" and question.question_type in ["multiple_choice", "visual_based"] %}
-            <ul class="review-options" aria-label="Opciones de respuesta">
-              {% for option in question.options %}
-                <li class="review-option"><span><strong>{{ loop.index }}.</strong> {{ option|rich_option }}</span></li>
               {% endfor %}
             </ul>
           {% elif question.question_type == "case_set" %}
             <div class="case-questions">
-              {% for child in question.content.questions %}
+              {% for child in question.review_children %}
                 <p><strong>{{ loop.index }}. {{ child.prompt }}</strong></p>
-                {% if question.result == "unanswered" %}
-                  <ul class="review-options" aria-label="Opciones de respuesta">
-                    {% for option in child.options %}
-                      <li class="review-option"><span><strong>{{ loop.index }}.</strong> {{ option|rich_option }}</span></li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
+                <ul class="review-options" aria-label="Opciones de respuesta">
+                  {% for option in child.options %}
+                    <li class="review-option {{ option.status }}">
+                      <span><strong>{{ option.letter }}.</strong> {{ option.text|rich_option }}</span>
+                      {% if option.status != "unanswered" %}
+                        <span class="review-option-status">
+                          {% if option.correct is none %}Clave no disponible
+                          {% elif option.correct %}Correcta
+                          {% else %}Incorrecta{% endif %}
+                          {% if option.selected %} · Tu respuesta{% endif %}
+                        </span>
+                      {% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
               {% endfor %}
             </div>
           {% endif %}
@@ -66,14 +69,14 @@
               almacenada no coincide con las opciones. Se debe corregir esta pregunta.</p>
             <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
           {% else %}
-            {% if not question.review_options %}
+            {% if not question.review_options and question.question_type != "case_set" %}
               <p><strong>Tu respuesta:</strong> {{ question.user_answer_display|rich_option }}</p>
             {% endif %}
             <p><strong>Resultado:</strong>
               {% if question.result == "correct" %}Tu respuesta es correcta. {% else %}Tu respuesta es incorrecta. {% endif %}
             </p>
           {% endif %}
-          {% if not question.review_options and question.result != "unanswered" %}
+          {% if not question.review_options and question.question_type != "case_set" and question.result != "unanswered" %}
             <p><strong>Respuesta correcta:</strong> {{ question.correct_answer_display|rich_option }}</p>
           {% endif %}
           <p class="explanation"><strong>Justificación:</strong> {{ question.explanation }}</p>

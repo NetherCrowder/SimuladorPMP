@@ -34,9 +34,9 @@
               <span style="width: {{ metric.consistency }}%"></span>
             </div>
           {% endif %}
-          <a class="btn btn-link route-questions-link"
-             href="{{ url_for('personal_bank', route=metric.route_id, category=metric.category_id) }}">
-            Ver preguntas de {{ metric.label }}
+          <a class="btn btn-link route-exams-link"
+             href="{{ url_for('practice_history', route_id=metric.route_id, category_id=metric.category_id) }}">
+            Ver pruebas de {{ metric.label }}
           </a>
         </div>
       {% endfor %}
