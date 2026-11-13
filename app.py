@@ -434,6 +434,12 @@ def create_app(test_config=None, initialize_database=True):
             return redirect(url_for("admin_dashboard"))
         db = get_db()
         user_id = g.user["id"]
+        try:
+            page = int(request.args.get("page", "1"))
+        except ValueError:
+            abort(400, "Número de página no válido.")
+        if page < 1:
+            abort(400, "Número de página no válido.")
         stats = db.execute(
             "SELECT COUNT(*) AS total, "
             "SUM(CASE WHEN pending = 1 THEN 1 ELSE 0 END) AS pending, "
@@ -441,17 +447,29 @@ def create_app(test_config=None, initialize_database=True):
             "FROM user_question_states WHERE user_id = %s",
             (user_id,),
         ).fetchone()
+        performance_averages = practice_performance_averages(db, user_id)
+        recent_exam_count = db.execute(
+            "SELECT COUNT(*) AS total FROM exams WHERE user_id = %s",
+            (user_id,),
+        ).fetchone()["total"]
+        recent_page_size = 10
+        recent_total_pages = max(
+            1, (recent_exam_count + recent_page_size - 1) // recent_page_size
+        )
+        page = min(page, recent_total_pages)
         recent_exams = db.execute(
             "SELECT id, requested_count, status, started_at, ended_at "
-            "FROM exams WHERE user_id = %s ORDER BY started_at DESC LIMIT 5",
-            (user_id,),
+            "FROM exams WHERE user_id = %s "
+            "ORDER BY started_at DESC, id DESC LIMIT %s OFFSET %s",
+            (user_id, recent_page_size, (page - 1) * recent_page_size),
         ).fetchall()
-        consistency = practice_consistency(db, user_id)
         return render_template(
             "dashboard.html",
             stats=stats,
             recent_exams=recent_exams,
-            consistency=consistency,
+            recent_page=page,
+            recent_total_pages=recent_total_pages,
+            performance_averages=performance_averages,
             practice_routes=PRACTICE_ROUTES,
         )
 
@@ -466,6 +484,12 @@ def create_app(test_config=None, initialize_database=True):
         sort = request.args.get("sort", "newest")
         if sort not in {"newest", "oldest", "best", "worst"}:
             abort(400, "Orden de pruebas no válido.")
+        try:
+            page = int(request.args.get("page", "1"))
+        except ValueError:
+            abort(400, "Número de página no válido.")
+        if page < 1:
+            abort(400, "Número de página no válido.")
         rows = get_db().execute(
             "SELECT e.id, e.requested_count, e.status, e.started_at, e.ended_at, "
             "q.question_type, q.options_json, q.correct_answer_json, "
@@ -512,6 +536,16 @@ def create_app(test_config=None, initialize_database=True):
                 and exam_response_is_correct(row)
             )
         exams = list(grouped_exams.values())
+        for exam in exams:
+            exam["score"] = round(
+                exam["correct"] * 100 / exam["category_question_count"]
+            )
+        performance_history = sorted(
+            exams,
+            key=lambda exam: (exam["started_at"], exam["id"]),
+            reverse=True,
+        )[:3]
+        performance_history.reverse()
         if date_range:
             start, end = date_range
             exams = [
@@ -519,10 +553,6 @@ def create_app(test_config=None, initialize_database=True):
                 for exam in exams
                 if start <= exam["started_at"] < end
             ]
-        for exam in exams:
-            exam["score"] = round(
-                exam["correct"] * 100 / exam["category_question_count"]
-            )
         sort_keys = {
             "newest": lambda exam: (exam["started_at"], exam["id"]),
             "oldest": lambda exam: (exam["started_at"], exam["id"]),
@@ -530,13 +560,20 @@ def create_app(test_config=None, initialize_database=True):
             "worst": lambda exam: (exam["score"], -exam["started_at"], -exam["id"]),
         }
         exams.sort(key=sort_keys[sort], reverse=sort in {"newest", "best"})
+        page_size = 3
+        total_pages = max(1, (len(exams) + page_size - 1) // page_size)
+        page = min(page, total_pages)
+        page_exams = exams[(page - 1) * page_size : page * page_size]
         return render_template(
             "exam_history.html",
-            exams=exams,
+            exams=page_exams,
+            page=page,
+            total_pages=total_pages,
             route=route,
             route_id=route_id,
             category_id=category_id,
             category_label=route["categories"][category_id],
+            performance_history=performance_history,
             selected_date=selected_date,
             selected_sort=sort,
         )
@@ -2853,28 +2890,28 @@ def official_exam_questions(db, requested_count):
     return questions, shortages
 
 
-def practice_consistency(db, user_id):
-    result = []
+def practice_performance_averages(db, user_id):
+    averages = {
+        axis: {category_id: None for category_id in route["categories"]}
+        for axis, route in PRACTICE_ROUTES.items()
+    }
     for axis, route in PRACTICE_ROUTES.items():
-        table = route["table"]
-        column = route["column"]
-        categories = route["categories"]
         rows = db.execute(
-            f"SELECT e.id AS exam_id, e.filters_json, e.ended_at, "
-            f"q.question_type, q.correct_answer_json, q.correct_option, "
-            f"a.response_json, a.selected_option, category.{column} AS category_id "
+            f"SELECT e.id AS exam_id, e.filters_json, e.started_at, "
+            f"q.question_type, q.options_json, q.correct_answer_json, "
+            f"q.correct_option, a.response_json, a.selected_option, "
+            f"category.{route['column']} AS category_id "
             f"FROM exams e JOIN exam_questions eq ON eq.exam_id = e.id "
             f"JOIN questions q ON q.id = eq.question_id "
-            f"JOIN {table} category ON category.question_id = q.id "
+            f"JOIN {route['table']} category ON category.question_id = q.id "
             f"LEFT JOIN exam_answers a ON a.exam_id = e.id "
             f"AND a.question_id = q.id "
             f"WHERE e.user_id = %s AND e.status IN ('completed', 'expired') "
             f"AND e.requested_count IN (15, 30) "
             f"AND e.filters_json::jsonb ->> 'axis' = %s "
-            f"ORDER BY e.ended_at DESC, e.id DESC",
+            f"ORDER BY e.started_at DESC, e.id DESC",
             (user_id, axis),
         ).fetchall()
-        attempts = {}
         exam_totals = {}
         for row in rows:
             filters = json.loads(row["filters_json"])
@@ -2885,43 +2922,42 @@ def practice_consistency(db, user_id):
                 or category_id not in filters.get("values", [])
             ):
                 continue
-            key = (row["exam_id"], category_id)
             total = exam_totals.setdefault(
-                key, {"ended_at": row["ended_at"], "correct": 0, "total": 0}
+                (row["exam_id"], category_id),
+                {"started_at": row["started_at"], "correct": 0, "total": 0},
             )
             total["total"] += 1
-            if exam_response_is_correct(row):
+            correct_answer = json.loads(
+                row["correct_answer_json"] or str(row["correct_option"])
+            )
+            options = json.loads(row["options_json"])
+            if (
+                valid_single_choice_answer(
+                    row["question_type"], correct_answer, options
+                )
+                and exam_response_is_correct(row)
+            ):
                 total["correct"] += 1
-        for (exam_id, category_id), score in exam_totals.items():
-            attempts.setdefault(category_id, []).append((score["ended_at"], exam_id, score))
-        for category_id, label in categories.items():
-            category_attempts = sorted(
-                attempts.get(category_id, []),
-                key=lambda item: (item[0] or 0, item[1]),
+        category_attempts = {}
+        for (exam_id, category_id), attempt in exam_totals.items():
+            category_attempts.setdefault(category_id, []).append(
+                (attempt["started_at"], exam_id, attempt)
+            )
+        for category_id, attempts in category_attempts.items():
+            latest_attempts = sorted(
+                attempts,
+                key=lambda item: (item[0], item[1]),
                 reverse=True,
             )[:3]
-            result.append(
-                {
-                    "route": route["label"],
-                    "route_id": axis,
-                    "label": label,
-                    "category_id": category_id,
-                    "attempt_count": len(category_attempts),
-                    "consistency": (
-                        round(
-                            sum(
-                                attempt["correct"] / attempt["total"] * 100
-                                for _, _, attempt in category_attempts
-                            )
-                            / len(category_attempts),
-                            1,
-                        )
-                        if category_attempts
-                        else None
-                    ),
-                }
+            averages[axis][category_id] = round(
+                sum(
+                    attempt["correct"] * 100 / attempt["total"]
+                    for _, _, attempt in latest_attempts
+                )
+                / len(latest_attempts),
+                1,
             )
-    return result
+    return averages
 
 
 def owned_exam(db, exam_id):

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import unittest
 import uuid
@@ -8,7 +9,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import urlencode, urlsplit
 
 import psycopg2
-from flask import Flask
+from flask import Flask, session
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from psycopg2.extensions import parse_dsn
@@ -34,7 +35,7 @@ from app import (
     count_matching_questions,
     OFFICIAL_EXAM_DISTRIBUTIONS,
     PRACTICE_ROUTES,
-    practice_consistency,
+    practice_performance_averages,
     build_review_options,
     valid_single_choice_answer,
 )
@@ -512,13 +513,146 @@ class QuestionTypeResponseTestCase(unittest.TestCase):
                 {"agile_hybrid": exam_count * 3 // 5, "predictive": exam_count * 2 // 5},
             )
 
-    def test_consistency_averages_only_the_three_latest_attempts_per_theme(self):
+    def test_practice_history_chart_shows_three_latest_scores(self):
+        rows = [
+            {
+                "id": exam_id,
+                "requested_count": 15,
+                "status": "completed",
+                "started_at": exam_id,
+                "ended_at": exam_id,
+                "category_question_count": 1,
+                "question_type": "multiple_choice",
+                "correct_answer_json": "0",
+                "correct_option": 0,
+                "options_json": '["A","B"]',
+                "response_json": str(response),
+                "selected_option": response,
+            }
+            for exam_id, response in ((1, 0), (2, 1), (3, 0), (4, 1))
+        ]
+        account = {"id": "user-id", "status": "active", "account_role": "user"}
+
+        def render_history(exam_rows, query_string=None):
+            db = Mock()
+            db.execute.return_value.fetchall.return_value = exam_rows
+            with patch("app.get_db", return_value=db), patch(
+                "app.authenticated_account", return_value=account
+            ), vercel_app.test_request_context(
+                "/practice/history/performance/governance",
+                query_string=query_string,
+            ):
+                session["user_id"] = "user-id"
+                return vercel_app.view_functions["practice_history"](
+                    "performance", "governance"
+                )
+
+        empty_history = render_history([])
+        self.assertIn("practice-performance", empty_history)
+        self.assertIn("Aún no hay pruebas para mostrar", empty_history)
+        self.assertNotIn("performance-chart", empty_history)
+
+        history = render_history(rows)
+        self.assertEqual(history.count("Ver resultados"), 3)
+        self.assertIn("Página 1 de 2", history)
+        chart = history.split('<ol class="performance-chart"', 1)[1].split(
+            "</ol>", 1
+        )[0]
+        self.assertEqual(
+            re.findall(
+                r'class="performance-chart-bar" style="height: ([^%]+)%"',
+                chart,
+            ),
+            ["0", "100", "0"],
+        )
+        second_page = render_history(rows, {"page": "2"})
+        self.assertEqual(second_page.count("Ver resultados"), 1)
+        self.assertIn("Página 2 de 2", second_page)
+        self.assertEqual(second_page.count("performance-chart-bar"), 3)
+
+    def test_dashboard_links_to_topics_and_paginates_ten_recent_exams(self):
+        account = {
+            "id": "user-id",
+            "status": "active",
+            "account_role": "user",
+            "first_name": "Test",
+            "username": "test",
+        }
+        exam_rows = [
+            {
+                "id": exam_id,
+                "requested_count": 15,
+                "status": "active",
+                "started_at": exam_id,
+                "ended_at": None,
+            }
+            for exam_id in range(1, 12)
+        ]
+        performance_averages = {
+            route_id: {category_id: None for category_id in route["categories"]}
+            for route_id, route in PRACTICE_ROUTES.items()
+        }
+        performance_averages["performance"]["governance"] = 77.3
+
+        def render_dashboard(page):
+            db = Mock()
+
+            def execute(query, parameters):
+                if "user_question_states" in query:
+                    return Mock(
+                        fetchone=Mock(
+                            return_value={
+                                "total": 0,
+                                "pending": 0,
+                                "favorites": 0,
+                            }
+                        )
+                    )
+                if "SELECT COUNT(*) AS total FROM exams" in query:
+                    return Mock(fetchone=Mock(return_value={"total": len(exam_rows)}))
+                limit, offset = parameters[1:]
+                return Mock(
+                    fetchall=Mock(
+                        return_value=exam_rows[offset : offset + limit]
+                    )
+                )
+
+            db.execute.side_effect = execute
+            with patch("app.get_db", return_value=db), patch(
+                "app.authenticated_account", return_value=account
+            ), patch(
+                "app.practice_performance_averages",
+                return_value=performance_averages,
+            ), vercel_app.test_request_context(
+                "/dashboard", query_string={"page": page}
+            ):
+                session["user_id"] = "user-id"
+                return vercel_app.view_functions["dashboard"]()
+
+        dashboard = render_dashboard("1")
+        self.assertNotIn("Consistencia por tema", dashboard)
+        self.assertNotIn('role="progressbar"', dashboard)
+        self.assertIn("Ver pruebas de Gobernanza (Governance)", dashboard)
+        self.assertIn("77.3%", dashboard)
+        recent_section = dashboard.split(
+            '<section class="panel dashboard-recent">', 1
+        )[1].split("</section>", 1)[0]
+        self.assertEqual(recent_section.count("Continuar"), 10)
+        self.assertIn("Página 1 de 2", recent_section)
+
+        second_page = render_dashboard("2").split(
+            '<section class="panel dashboard-recent">', 1
+        )[1].split("</section>", 1)[0]
+        self.assertEqual(second_page.count("Continuar"), 1)
+        self.assertIn("Página 2 de 2", second_page)
+
+    def test_dashboard_topic_averages_only_the_latest_three_attempts(self):
         rows = []
-        for exam_id, ended_at, responses in (
-            (4, 4, (0, 0)),
-            (3, 3, (0, 1)),
-            (2, 2, (1, 1)),
-            (1, 1, (0, 0)),
+        for exam_id, responses in (
+            (4, (0, 0)),
+            (3, (1, 1)),
+            (2, (0, 1)),
+            (1, (0, 0)),
         ):
             for response in responses:
                 rows.append(
@@ -531,8 +665,9 @@ class QuestionTypeResponseTestCase(unittest.TestCase):
                                 "values": ["governance"],
                             }
                         ),
-                        "ended_at": ended_at,
+                        "started_at": exam_id,
                         "question_type": "multiple_choice",
+                        "options_json": '["A","B"]',
                         "correct_answer_json": "0",
                         "correct_option": 0,
                         "response_json": json.dumps(response),
@@ -547,11 +682,11 @@ class QuestionTypeResponseTestCase(unittest.TestCase):
             Mock(fetchall=Mock(return_value=[])),
         ]
 
-        consistency = practice_consistency(db, "user-id")
+        averages = practice_performance_averages(db, "user-id")
 
-        self.assertEqual(consistency[0]["label"], "Gobernanza (Governance)")
-        self.assertEqual(consistency[0]["attempt_count"], 3)
-        self.assertEqual(consistency[0]["consistency"], 50.0)
+        self.assertEqual(averages["performance"]["governance"], 50.0)
+        self.assertIsNone(averages["performance"]["scope"])
+        self.assertIsNone(averages["eco"]["people"])
 
     def test_rich_option_formatting_escapes_html(self):
         rendered = str(render_rich_option("**bold** and *italic* <script>alert(1)</script>"))

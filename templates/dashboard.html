@@ -13,54 +13,62 @@
     <div class="stat-card"><strong>{{ stats.pending or 0 }}</strong><span>Pendientes o sin responder</span></div>
     <div class="stat-card"><strong>{{ stats.favorites or 0 }}</strong><span>Favoritas</span></div>
   </section>
-  <section class="panel">
-    <h2>Consistencia por tema</h2>
-    <p class="muted">Promedio de tus hasta tres intentos más recientes en cada tema de la ruta correspondiente.</p>
-    <div class="consistency-list">
-      {% for metric in consistency %}
-        <div class="consistency-item">
-          <div class="metric-heading">
-            <div><span class="eyebrow">{{ metric.route }}</span><strong>{{ metric.label }}</strong></div>
-            {% if metric.consistency is not none %}
-              <span>Tu consistencia actual en tema {{ metric.label }}: {{ metric.consistency }}%
-                (Promedio de tus últimas {{ metric.attempt_count }} pruebas)</span>
-            {% else %}
-              <span class="muted">Aún sin intentos</span>
-            {% endif %}
-          </div>
-          {% if metric.consistency is not none %}
-            <div class="metric-track" role="progressbar" aria-label="Consistencia {{ metric.label }}"
-                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ metric.consistency }}">
-              <span style="width: {{ metric.consistency }}%"></span>
-            </div>
-          {% endif %}
-          <a class="btn btn-link route-exams-link"
-             href="{{ url_for('practice_history', route_id=metric.route_id, category_id=metric.category_id) }}">
-            Ver pruebas de {{ metric.label }}
-          </a>
-        </div>
-      {% endfor %}
-    </div>
-  </section>
-  <section class="panel">
-    <div class="section-heading">
-      <h2>Pruebas recientes</h2>
-    </div>
-    {% if recent_exams %}
-      <ul class="exam-list">
-        {% for exam in recent_exams %}
-          <li>
-            <span>{{ exam.requested_count }} preguntas · {{ exam.started_at|datetime }}</span>
-            {% if exam.status == "active" %}
-              <a href="{{ url_for('take_exam', exam_id=exam.id) }}">Continuar</a>
-            {% else %}
-              <a href="{{ url_for('exam_results', exam_id=exam.id) }}">Ver resultados</a>
-            {% endif %}
-          </li>
+  <div class="dashboard-columns">
+    <section class="panel dashboard-topics">
+      <h2>Pruebas por tema</h2>
+      <p class="muted">Promedio de hasta tus tres pruebas más recientes por tema.</p>
+      <ul class="exam-list practice-topic-list">
+        {% for route_id, route in practice_routes.items() %}
+          {% for category_id, label in route.categories.items() %}
+            {% set average = performance_averages[route_id][category_id] %}
+            <li>
+              <div class="practice-topic-details">
+                <span class="practice-topic-label">
+                  <span class="eyebrow">{{ route.label }}</span>
+                  <strong>{{ label }}</strong>
+                </span>
+                <a href="{{ url_for('practice_history', route_id=route_id, category_id=category_id) }}">
+                  Ver pruebas de {{ label }}
+                </a>
+              </div>
+              <div class="practice-topic-average">
+                <strong>{{ average if average is not none else "—" }}{% if average is not none %}%{% endif %}</strong>
+                <span>{{ "Promedio" if average is not none else "Sin pruebas" }}</span>
+              </div>
+            </li>
+          {% endfor %}
         {% endfor %}
       </ul>
-    {% else %}
-      <p class="muted">Todavía no has realizado pruebas.</p>
-    {% endif %}
-  </section>
+    </section>
+    <section class="panel dashboard-recent">
+      <h2>Pruebas recientes</h2>
+      {% if recent_exams %}
+        <ul class="exam-list">
+          {% for exam in recent_exams %}
+            <li>
+              <span>{{ exam.requested_count }} preguntas · {{ exam.started_at|datetime }}</span>
+              {% if exam.status == "active" %}
+                <a href="{{ url_for('take_exam', exam_id=exam.id) }}">Continuar</a>
+              {% else %}
+                <a href="{{ url_for('exam_results', exam_id=exam.id) }}">Ver resultados</a>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+        {% if recent_total_pages > 1 %}
+          <nav class="dashboard-pagination" aria-label="Paginación de pruebas recientes">
+            {% if recent_page > 1 %}
+              <a class="button secondary" href="{{ url_for('dashboard', page=recent_page - 1) }}">Anterior</a>
+            {% endif %}
+            <span>Página {{ recent_page }} de {{ recent_total_pages }}</span>
+            {% if recent_page < recent_total_pages %}
+              <a class="button secondary" href="{{ url_for('dashboard', page=recent_page + 1) }}">Siguiente</a>
+            {% endif %}
+          </nav>
+        {% endif %}
+      {% else %}
+        <p class="muted">Todavía no has realizado pruebas.</p>
+      {% endif %}
+    </section>
+  </div>
 {% endblock %}

@@ -70,6 +70,9 @@ input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 3px 
 .message.error { background: #fff0f0; color: var(--red); }
 .message.success { background: #eaf7ef; color: var(--green); }
 .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+.dashboard-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 1rem; }
+.dashboard-columns > .panel { min-width: 0; }
+.dashboard-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-top: 1rem; }
 .stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.5rem 0 2rem; }
 .stat-card { display: grid; gap: .2rem; padding: 1.2rem; color: var(--ink); text-decoration: none; }
 .stat-card strong { font-size: 2rem; line-height: 1.1; }
@@ -122,6 +125,28 @@ td form { margin: 0; }
 .personal-bank-filters, .history-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); align-items: end; gap: 1rem; margin: 1rem 0 1.5rem; padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--surface); }
 .personal-bank-filters label, .history-filters label { margin: 0; }
 .personal-bank-filters .actions, .history-filters .actions { margin: 0; }
+.practice-history-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(18rem, .85fr); align-items: start; gap: 1rem; }
+.practice-history-main { min-width: 0; }
+.practice-history-main .history-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: .5rem; padding: .65rem; }
+.practice-history-main .history-filters label { min-width: 0; gap: .25rem; font-size: .88rem; }
+.practice-history-main .history-filters input,
+.practice-history-main .history-filters select { min-width: 0; min-height: 2.35rem; padding: .4rem .5rem; font-size: .88rem; }
+.practice-history-main .history-filters .actions { flex-wrap: nowrap; gap: .4rem; }
+.practice-history-main .history-filters .button { min-height: 2.35rem; padding: .45rem .6rem; font-size: .84rem; white-space: nowrap; }
+.practice-topic-list li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.practice-topic-details { display: grid; justify-items: start; gap: .3rem; min-width: 0; }
+.practice-topic-label { display: grid; gap: .1rem; }
+.practice-topic-label .eyebrow { margin-bottom: 0; }
+.practice-topic-list a { justify-self: start; }
+.practice-topic-average { display: grid; flex: 0 0 auto; justify-items: end; gap: .15rem; text-align: right; }
+.practice-topic-average strong { color: var(--blue-dark); font-size: clamp(1.5rem, 2.4vw, 2rem); line-height: 1; }
+.practice-topic-average span { color: var(--muted); font-size: .75rem; }
+.history-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-top: 1rem; }
+.performance-chart { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+.performance-chart-item { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: .3rem; text-align: center; }
+.performance-chart-track { display: flex; width: min(100%, 4rem); height: 8rem; align-items: flex-end; overflow: hidden; border-radius: .4rem .4rem 0 0; background: #e4eaf1; }
+.performance-chart-bar { display: block; width: 100%; background: var(--blue); }
+.performance-chart-date { color: var(--muted); font-size: .75rem; }
 [data-bank-no-results][hidden] { display: none; }
 .question-artifact-preview { display: block; max-width: 100%; max-height: 34rem; object-fit: contain; }
 .admin-artifact-preview { position: relative; display: inline-block; max-width: 100%; }
@@ -290,7 +315,13 @@ body.exam-page .site-footer { color: #94a3b8; }
   .case-scenario h2 { position: static; margin: 0 0 .75rem; padding: 0; }
   .question-navigation { position: static; }
   .stat-grid, .result-grid { grid-template-columns: 1fr; }
+  .dashboard-columns { grid-template-columns: 1fr; }
   .page-heading, .exam-topline { align-items: flex-start; flex-direction: column; }
   .exam-clock { justify-items: start; }
   .bank-tools { grid-template-columns: 1fr; }
+  .practice-history-layout { grid-template-columns: 1fr; }
+}
+@media (max-width: 520px) {
+  .practice-history-main .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .practice-history-main .history-filters .actions { grid-column: 1 / -1; }
 }
